@@ -1,20 +1,13 @@
 use anyhow::Result;
-
-use crate::config::Config;
-
-mod bot;
-mod config;
-mod utils;
-mod visits;
+use xecut_bot::{Config, Handler};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     pretty_env_logger::init_timed();
-
     let config = Config::new()?;
 
     tokio::spawn({
-        let handler = bot::Handler::new(config).await?;
+        let handler = Handler::new(config).await?;
         async move {
             handler.run().await;
         }
