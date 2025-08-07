@@ -6,11 +6,19 @@ use chrono::{Datelike, Local, NaiveDate};
 use sqlx::sqlite::SqlitePool;
 use tokio_util::sync::{CancellationToken, DropGuard};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VisitStatus {
+    Planned,
+    CheckedIn,
+    CheckedOut,
+}
+
 #[derive(Debug, Clone)]
 pub struct Visit {
     pub person: Uid,
     pub day: NaiveDate,
     pub purpose: String,
+    pub status: VisitStatus,
 }
 
 pub struct Visits {
@@ -51,16 +59,62 @@ impl Visits {
         })
     }
 
+    pub async fn check_in(&self, person: Uid, day: NaiveDate, purpose: String) -> Result<bool> {
+        let person_id: i64 = person.into();
+        let day_num = day.num_days_from_ce();
+        let updated = sqlx::query!(
+            "UPDATE visit SET status = 1, purpose = ?3 WHERE person = ?1 AND day = ?2",
+            person_id,
+            day_num,
+            purpose
+        )
+        .execute(&self.pool)
+        .await?
+        .rows_affected()
+            > 0;
+        if updated {
+            return Ok(true);
+        }
+        // If not found, create new CheckedIn visit
+        let visit = Visit {
+            person,
+            day,
+            purpose,
+            status: VisitStatus::CheckedIn,
+        };
+        self.add_visit(visit).await?;
+        Ok(false)
+    }
+
+    pub async fn check_out(&self, person: Uid, day: NaiveDate) -> Result<bool> {
+        let person: i64 = person.into();
+        let day = day.num_days_from_ce();
+        let updated = sqlx::query!(
+            "UPDATE visit SET status = 2 WHERE person = ?1 AND day = ?2",
+            person,
+            day
+        )
+        .execute(&self.pool)
+        .await?
+        .rows_affected()
+            > 0;
+        Ok(updated)
+    }
+
     pub async fn get_visits(&self) -> Result<Vec<Visit>> {
         let current_day = today().num_days_from_ce();
         Ok(sqlx::query!(
-            "SELECT person, day, purpose FROM visit WHERE day >= ?1",
+            "SELECT person, day, purpose, status FROM visit WHERE day >= ?1",
             current_day
         )
-        .map(|r| Visit {
-            person: r.person.into(),
-            day: NaiveDate::from_num_days_from_ce_opt(r.day.try_into().unwrap()).unwrap(),
-            purpose: r.purpose,
+        .map(|r| {
+            let day = chrono::NaiveDate::from_num_days_from_ce_opt(r.day as i32).unwrap();
+            Visit {
+                person: Uid::from(r.person),
+                day,
+                purpose: r.purpose,
+                status: VisitStatus::from(r.status as i32),
+            }
         })
         .fetch_all(&self.pool)
         .await?)
@@ -69,9 +123,7 @@ impl Visits {
     pub async fn add_visit(&self, visit: Visit) -> Result<bool> {
         let person: i64 = visit.person.into();
         let day = visit.day.num_days_from_ce();
-
         let mut tx = self.pool.begin().await?;
-
         let exists = sqlx::query_scalar!(
             r#"SELECT EXISTS(SELECT 1 FROM visit WHERE person = ?1 AND day = ?2) AS "exists: bool""#,
             person,
@@ -79,18 +131,17 @@ impl Visits {
         )
         .fetch_one(&mut *tx)
         .await?;
-
+        let status_int: i32 = visit.status.into();
         sqlx::query!(
-                "INSERT INTO visit (person, day, purpose) VALUES (?1, ?2, ?3) ON CONFLICT DO UPDATE SET purpose = excluded.purpose",
+                "INSERT INTO visit (person, day, purpose, status) VALUES (?1, ?2, ?3, ?4) ON CONFLICT DO UPDATE SET purpose = excluded.purpose, status = excluded.status",
                 person,
                 day,
-                visit.purpose
+                visit.purpose,
+                status_int
             )
             .execute(&mut *tx)
             .await?;
-
         tx.commit().await?;
-
         Ok(!exists)
     }
 
@@ -117,5 +168,25 @@ impl Visits {
             .await?;
 
         Ok(())
+    }
+}
+
+impl From<VisitStatus> for i32 {
+    fn from(status: VisitStatus) -> Self {
+        match status {
+            VisitStatus::Planned => 0,
+            VisitStatus::CheckedIn => 1,
+            VisitStatus::CheckedOut => 2,
+        }
+    }
+}
+
+impl From<i32> for VisitStatus {
+    fn from(val: i32) -> Self {
+        match val {
+            1 => VisitStatus::CheckedIn,
+            2 => VisitStatus::CheckedOut,
+            _ => VisitStatus::Planned,
+        }
     }
 }
