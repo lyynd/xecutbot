@@ -25,5 +25,10 @@
     pkgs.openssl
     pkgs.gdb
     pkgs.nixd
+    pkgs.sqlx-cli
   ];
+
+  env = {
+    DATABASE_URL = "sqlite:xecut_bot.sqlite";
+  };
 }
