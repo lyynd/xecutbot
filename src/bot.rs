@@ -300,7 +300,7 @@ impl Handler {
     }
 
     async fn handle_get_visits(&self, msg: &Message) -> Result<()> {
-        let visits = self.visits.get_visits().await?;
+        let visits = self.visits.get_visits(today()).await?;
 
         self.bot
             .send_message(msg.chat.id, self.format_visits(visits).await?)

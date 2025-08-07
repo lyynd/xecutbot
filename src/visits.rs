@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use crate::{Config, bot::Uid, utils::today};
+use crate::{Config, bot::Uid};
 use anyhow::Result;
 use chrono::{Datelike, Local, NaiveDate};
 use sqlx::sqlite::SqlitePool;
@@ -101,8 +101,8 @@ impl Visits {
         Ok(updated)
     }
 
-    pub async fn get_visits(&self) -> Result<Vec<Visit>> {
-        let current_day = today().num_days_from_ce();
+    pub async fn get_visits(&self, from: NaiveDate) -> Result<Vec<Visit>> {
+        let current_day = from.num_days_from_ce();
         Ok(sqlx::query!(
             "SELECT person, day, purpose, status FROM visit WHERE day >= ?1",
             current_day
