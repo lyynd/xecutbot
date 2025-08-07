@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use crate::{Config, bot::Uid};
+use crate::{bot::Uid, config::DbConfig};
 use anyhow::Result;
 use chrono::{Datelike, Local, NaiveDate};
 use sqlx::sqlite::SqlitePool;
@@ -31,7 +31,7 @@ const VISIT_HISTORY_DAYS: i32 = 30;
 const VISITS_CLEANUP_INTERVAL: Duration = Duration::from_secs(4 * 60 * 60);
 
 impl Visits {
-    pub async fn new(config: &Config) -> Result<Visits, anyhow::Error> {
+    pub async fn new(config: &DbConfig) -> Result<Visits, anyhow::Error> {
         let pool = SqlitePool::connect(&config.sqlite_path).await?;
 
         let pool_clone = pool.clone();

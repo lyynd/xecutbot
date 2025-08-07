@@ -14,7 +14,7 @@ use teloxide::{
 };
 
 use crate::{
-    config::Config,
+    config::TelegramBotConfig,
     visits::{Visit, VisitStatus},
 };
 use crate::{utils::today, visits::Visits};
@@ -56,7 +56,7 @@ enum Command {
 }
 
 pub struct Handler {
-    config: Config,
+    config: TelegramBotConfig,
     bot: Bot,
     visits: Visits,
 }
@@ -92,9 +92,8 @@ fn parse_visit(author: UserId, msg: &str) -> Visit {
 }
 
 impl Handler {
-    pub async fn new(config: Config) -> Result<Arc<Handler>> {
-        let bot = Bot::new(config.telegram_bot_token.clone());
-        let visits = Visits::new(&config).await?;
+    pub async fn new(config: TelegramBotConfig, visits: Visits) -> Result<Arc<Handler>> {
+        let bot = Bot::new(config.bot_token.clone());
         Ok(Arc::new(Handler {
             config,
             bot,
