@@ -26,6 +26,7 @@
     pkgs.gdb
     pkgs.nixd
     pkgs.sqlx-cli
+    pkgs.sqlite
   ];
 
   env = {
