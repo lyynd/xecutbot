@@ -1,0 +1,165 @@
+use chrono::NaiveDate;
+use sqlx::sqlite::SqlitePool;
+use xecut_bot::bot::Uid;
+use xecut_bot::{Visit, VisitStatus, Visits};
+
+fn in_memory_db_config() -> xecut_bot::config::DbConfig {
+    xecut_bot::config::DbConfig {
+        sqlite_path: ":memory:".to_string(),
+    }
+}
+
+async fn setup_schema(pool: &SqlitePool) {
+    sqlx::query(
+        "
+        CREATE TABLE visit (
+            person INTEGER,
+            day INTEGER,
+            purpose TEXT,
+            status INTEGER,
+            PRIMARY KEY (person, day)
+        );
+        ",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+// Helper to create Visits with in-memory DB and apply schema
+async fn make_visits() -> Visits {
+    let cfg = in_memory_db_config();
+    let visits = Visits::new(&cfg).await.unwrap();
+    setup_schema(visits.pool()).await;
+    visits
+}
+
+#[tokio::test]
+async fn test_upsert_and_get_visits() {
+    let visits = make_visits().await;
+    let person = Uid::from(1);
+    let day = NaiveDate::from_ymd_opt(2025, 8, 8).unwrap();
+    let update = xecut_bot::visits::VisitUpdate {
+        person,
+        day,
+        purpose: Some("work".to_string()),
+        status: VisitStatus::Planned,
+    };
+    let inserted = visits.upsert_visit(update).await.unwrap();
+    assert!(inserted);
+    let visits_vec = visits.get_visits(day).await.unwrap();
+    assert_eq!(
+        visits_vec,
+        vec![Visit {
+            person,
+            day,
+            purpose: "work".to_string(),
+            status: VisitStatus::Planned,
+        }]
+    );
+}
+
+#[tokio::test]
+async fn test_upsert_update_visit() {
+    let visits = make_visits().await;
+    let person = Uid::from(2);
+    let day = NaiveDate::from_ymd_opt(2025, 8, 8).unwrap();
+    let update1 = xecut_bot::visits::VisitUpdate {
+        person,
+        day,
+        purpose: Some("work".to_string()),
+        status: VisitStatus::Planned,
+    };
+    let inserted = visits.upsert_visit(update1).await.unwrap();
+    assert!(inserted);
+    let update2 = xecut_bot::visits::VisitUpdate {
+        person,
+        day,
+        purpose: Some("meeting".to_string()),
+        status: VisitStatus::CheckedIn,
+    };
+    let inserted = visits.upsert_visit(update2).await.unwrap();
+    assert!(!inserted);
+    let visits_vec = visits.get_visits(day).await.unwrap();
+    assert_eq!(
+        visits_vec,
+        vec![Visit {
+            person,
+            day,
+            purpose: "meeting".to_string(),
+            status: VisitStatus::CheckedIn,
+        }]
+    );
+}
+
+#[tokio::test]
+async fn test_delete_visit() {
+    let visits = make_visits().await;
+    let person = Uid::from(3);
+    let day = NaiveDate::from_ymd_opt(2025, 8, 8).unwrap();
+    let update = xecut_bot::visits::VisitUpdate {
+        person,
+        day,
+        purpose: Some("delete".to_string()),
+        status: VisitStatus::Planned,
+    };
+    let inserted = visits.upsert_visit(update).await.unwrap();
+    assert!(inserted);
+    let deleted = visits.delete_visit(person, day).await.unwrap();
+    assert!(deleted);
+    let visits_vec = visits.get_visits(day).await.unwrap();
+    assert_eq!(visits_vec, vec![]);
+}
+
+#[tokio::test]
+async fn test_delete_nonexistent_visit() {
+    let visits = make_visits().await;
+    let person = Uid::from(999);
+    let day = NaiveDate::from_ymd_opt(2025, 8, 8).unwrap();
+    let deleted = visits.delete_visit(person, day).await.unwrap();
+    assert!(!deleted);
+}
+
+#[tokio::test]
+async fn test_cleanup() {
+    let visits = make_visits().await;
+    let person = Uid::from(4);
+    let old_day = NaiveDate::from_ymd_opt(2025, 7, 1).unwrap();
+    let new_day = NaiveDate::from_ymd_opt(2025, 8, 8).unwrap();
+    let update_old = xecut_bot::visits::VisitUpdate {
+        person,
+        day: old_day,
+        purpose: Some("old".to_string()),
+        status: VisitStatus::Planned,
+    };
+    let update_new = xecut_bot::visits::VisitUpdate {
+        person,
+        day: new_day,
+        purpose: Some("new".to_string()),
+        status: VisitStatus::Planned,
+    };
+    let inserted = visits.upsert_visit(update_old).await.unwrap();
+    assert!(inserted);
+    let inserted = visits.upsert_visit(update_new).await.unwrap();
+    assert!(inserted);
+    // Use a fixed date for cleanup instead of chrono::Local::now()
+    let cleanup_date = NaiveDate::from_ymd_opt(2025, 8, 8)
+        .unwrap()
+        .and_hms_opt(0, 0, 0)
+        .unwrap();
+    let offset = *chrono::Local::now().offset();
+    let fixed_datetime = chrono::DateTime::from_naive_utc_and_offset(cleanup_date, offset);
+    xecut_bot::Visits::cleanup(visits.pool(), fixed_datetime)
+        .await
+        .unwrap();
+    let visits_vec = visits.get_visits(new_day).await.unwrap();
+    assert_eq!(
+        visits_vec,
+        vec![Visit {
+            person,
+            day: new_day,
+            purpose: "new".to_string(),
+            status: VisitStatus::Planned,
+        }]
+    );
+}

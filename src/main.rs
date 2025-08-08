@@ -10,9 +10,11 @@ async fn main() -> Result<()> {
         let visits = Visits::new(&config.db)
             .await
             .expect("DB initialization success");
+        let cancellation_token = visits.spawn_cleanup_task().await;
         let handler = Handler::new(config.telegram_bot, visits).await?;
         async move {
             handler.run().await;
+            cancellation_token.cancel();
         }
     })
     .await?;

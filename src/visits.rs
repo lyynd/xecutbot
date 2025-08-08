@@ -2,9 +2,9 @@ use std::time::Duration;
 
 use crate::{bot::Uid, config::DbConfig};
 use anyhow::Result;
-use chrono::{Datelike, Local, NaiveDate};
+use chrono::{DateTime, Datelike, Local, NaiveDate};
 use sqlx::sqlite::SqlitePool;
-use tokio_util::sync::{CancellationToken, DropGuard};
+use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VisitStatus {
@@ -13,7 +13,7 @@ pub enum VisitStatus {
     CheckedOut,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Visit {
     pub person: Uid,
     pub day: NaiveDate,
@@ -21,23 +21,33 @@ pub struct Visit {
     pub status: VisitStatus,
 }
 
+#[derive(Debug, Clone)]
+pub struct VisitUpdate {
+    pub person: Uid,
+    pub day: NaiveDate,
+    pub purpose: Option<String>,
+    pub status: VisitStatus,
+}
+
 pub struct Visits {
     pool: SqlitePool,
-    #[allow(dead_code)]
-    cleanup_cancellation_drop_token: DropGuard,
 }
 
 const VISIT_HISTORY_DAYS: i32 = 30;
-const VISITS_CLEANUP_INTERVAL: Duration = Duration::from_secs(4 * 60 * 60);
+const VISITS_CLEANUP_INTERVAL: Duration = Duration::from_secs(4 * 60 * 60); // 4 hours
 
 impl Visits {
     pub async fn new(config: &DbConfig) -> Result<Visits, anyhow::Error> {
         let pool = SqlitePool::connect(&config.sqlite_path).await?;
 
-        let pool_clone = pool.clone();
+        Ok(Visits { pool })
+    }
+
+    pub async fn spawn_cleanup_task(&self) -> CancellationToken {
+        let pool_clone = self.pool.clone();
 
         let cancellation_token = CancellationToken::new();
-        let cancellation_token_listen = cancellation_token.clone();
+        let result = cancellation_token.clone();
 
         tokio::task::spawn(async move {
             let mut interval = tokio::time::interval(VISITS_CLEANUP_INTERVAL);
@@ -45,60 +55,16 @@ impl Visits {
             loop {
                 tokio::select! {
                     _ = interval.tick() => {}
-                    _ = cancellation_token_listen.cancelled() => { break }
+                    _ = cancellation_token.cancelled() => { break }
                 };
-                Self::cleanup(&pool_clone)
+                log::debug!("Visits cleanup task running");
+                Self::cleanup(&pool_clone, Local::now())
                     .await
                     .expect("successful cleanup");
             }
         });
 
-        Ok(Visits {
-            pool,
-            cleanup_cancellation_drop_token: cancellation_token.drop_guard(),
-        })
-    }
-
-    pub async fn check_in(&self, person: Uid, day: NaiveDate, purpose: String) -> Result<bool> {
-        let person_id: i64 = person.into();
-        let day_num = day.num_days_from_ce();
-        let updated = sqlx::query!(
-            "UPDATE visit SET status = 1, purpose = ?3 WHERE person = ?1 AND day = ?2",
-            person_id,
-            day_num,
-            purpose
-        )
-        .execute(&self.pool)
-        .await?
-        .rows_affected()
-            > 0;
-        if updated {
-            return Ok(true);
-        }
-        // If not found, create new CheckedIn visit
-        let visit = Visit {
-            person,
-            day,
-            purpose,
-            status: VisitStatus::CheckedIn,
-        };
-        self.add_visit(visit).await?;
-        Ok(false)
-    }
-
-    pub async fn check_out(&self, person: Uid, day: NaiveDate) -> Result<bool> {
-        let person: i64 = person.into();
-        let day = day.num_days_from_ce();
-        let updated = sqlx::query!(
-            "UPDATE visit SET status = 2 WHERE person = ?1 AND day = ?2",
-            person,
-            day
-        )
-        .execute(&self.pool)
-        .await?
-        .rows_affected()
-            > 0;
-        Ok(updated)
+        result
     }
 
     pub async fn get_visits(&self, from: NaiveDate) -> Result<Vec<Visit>> {
@@ -120,29 +86,50 @@ impl Visits {
         .await?)
     }
 
-    pub async fn add_visit(&self, visit: Visit) -> Result<bool> {
-        let person: i64 = visit.person.into();
-        let day = visit.day.num_days_from_ce();
+    pub async fn upsert_visit(&self, visit_update: VisitUpdate) -> Result<bool> {
+        let person: i64 = visit_update.person.into();
+        let day = visit_update.day.num_days_from_ce();
         let mut tx = self.pool.begin().await?;
-        let exists = sqlx::query_scalar!(
-            r#"SELECT EXISTS(SELECT 1 FROM visit WHERE person = ?1 AND day = ?2) AS "exists: bool""#,
+        let existing = sqlx::query!(
+            "SELECT purpose, status FROM visit WHERE person = ?1 AND day = ?2",
             person,
             day
         )
-        .fetch_one(&mut *tx)
+        .fetch_optional(&mut *tx)
         .await?;
-        let status_int: i32 = visit.status.into();
-        sqlx::query!(
-                "INSERT INTO visit (person, day, purpose, status) VALUES (?1, ?2, ?3, ?4) ON CONFLICT DO UPDATE SET purpose = excluded.purpose, status = excluded.status",
+        let mut inserted = false;
+        if let Some(row) = existing {
+            let should_update_purpose = visit_update.purpose.is_some();
+            let should_update_status = visit_update.status != VisitStatus::from(row.status as i32);
+            if should_update_purpose || should_update_status {
+                let purpose = visit_update.purpose.unwrap_or(row.purpose);
+                let status_int: i32 = visit_update.status.into();
+                sqlx::query!(
+                    "UPDATE visit SET purpose = ?3, status = ?4 WHERE person = ?1 AND day = ?2",
+                    person,
+                    day,
+                    purpose,
+                    status_int,
+                )
+                .execute(&mut *tx)
+                .await?;
+            }
+        } else {
+            let purpose = visit_update.purpose.unwrap_or_default();
+            let status_int: i32 = visit_update.status.into();
+            sqlx::query!(
+                "INSERT INTO visit (person, day, purpose, status) VALUES (?1, ?2, ?3, ?4)",
                 person,
                 day,
-                visit.purpose,
+                purpose,
                 status_int
             )
             .execute(&mut *tx)
             .await?;
+            inserted = true;
+        }
         tx.commit().await?;
-        Ok(!exists)
+        Ok(inserted)
     }
 
     pub async fn delete_visit(&self, person: Uid, day: NaiveDate) -> Result<bool> {
@@ -159,8 +146,8 @@ impl Visits {
             > 0)
     }
 
-    pub async fn cleanup(pool: &SqlitePool) -> Result<()> {
-        let current_day = Local::now().date_naive().num_days_from_ce();
+    pub async fn cleanup(pool: &SqlitePool, now: DateTime<Local>) -> Result<()> {
+        let current_day = now.date_naive().num_days_from_ce();
         let cutoff = current_day - VISIT_HISTORY_DAYS;
 
         sqlx::query!("DELETE FROM visit WHERE day < ?1", cutoff)
@@ -168,6 +155,10 @@ impl Visits {
             .await?;
 
         Ok(())
+    }
+
+    pub fn pool(&self) -> &SqlitePool {
+        &self.pool
     }
 }
 

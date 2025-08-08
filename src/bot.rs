@@ -15,11 +15,11 @@ use teloxide::{
 
 use crate::{
     config::TelegramBotConfig,
-    visits::{Visit, VisitStatus},
+    visits::{Visit, VisitStatus, VisitUpdate},
 };
 use crate::{utils::today, visits::Visits};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Uid(UserId);
 
 impl From<i64> for Uid {
@@ -37,19 +37,19 @@ impl From<Uid> for i64 {
 #[derive(BotCommands, Clone, Copy)]
 #[command(rename_rule = "lowercase")]
 enum Command {
-    #[command(description = "Репостнуть в live канал (на который реплай)")]
+    #[command(description = "Репостнуть пост в live канал (реплайни на пост)")]
     PostLive,
     #[command(description = "Посмотреть кто собирается в хакспейс")]
     GetVisits,
     #[command(
         description = "Запланировать зайти в хакспейс (опционально дата в формате YYYY-MM-DD и описание зачем)"
     )]
-    AddVisit,
+    PlanVisit,
     #[command(
         description = "Передумать заходить в хакспейс (опционально дата в формате YYYY-MM-DD)"
     )]
-    DelVisit,
-    #[command(description = "Отметиться как зашедший (опционально комментарий)")]
+    UnplanVisit,
+    #[command(description = "Отметиться как зашедший (опционально описание зачем)")]
     CheckIn,
     #[command(description = "Отметиться как ушедший")]
     CheckOut,
@@ -81,12 +81,16 @@ fn parse_day_purpose(text: &str) -> (NaiveDate, &str) {
     (date, purpose.trim())
 }
 
-fn parse_visit(author: UserId, msg: &str) -> Visit {
+fn parse_visit_text(author: UserId, msg: &str) -> VisitUpdate {
     let (day, purpose) = parse_day_purpose(msg);
-    Visit {
+    VisitUpdate {
         person: Uid(author),
         day,
-        purpose: purpose.to_owned(),
+        purpose: if purpose.is_empty() {
+            None
+        } else {
+            Some(purpose.to_owned())
+        },
         status: VisitStatus::Planned,
     }
 }
@@ -146,8 +150,8 @@ impl Handler {
         match cmd {
             Command::PostLive => self.handle_post_live(msg).await,
             Command::GetVisits => self.handle_get_visits(msg).await,
-            Command::AddVisit => self.handle_add_visit(msg).await,
-            Command::DelVisit => self.handle_del_visit(msg).await,
+            Command::PlanVisit => self.handle_plan_visit(msg).await,
+            Command::UnplanVisit => self.handle_unplan_visit(msg).await,
             Command::CheckIn => self.handle_check_in(msg).await,
             Command::CheckOut => self.handle_check_out(msg).await,
         }
@@ -251,8 +255,8 @@ impl Handler {
 
     async fn format_visit(&self, resident: bool, v: &Visit) -> Result<String> {
         let status_str = match v.status {
-            VisitStatus::Planned => "(запланировано)",
-            VisitStatus::CheckedIn => "(зашёл)",
+            VisitStatus::Planned => "",
+            VisitStatus::CheckedIn => "(сейчас в спейсе)",
             VisitStatus::CheckedOut => "(ушёл)",
         };
         Ok(format!(
@@ -310,15 +314,15 @@ impl Handler {
         Ok(())
     }
 
-    async fn handle_add_visit(&self, msg: &Message) -> Result<()> {
+    async fn handle_plan_visit(&self, msg: &Message) -> Result<()> {
         let msg_text = strip_command(msg.text().expect("message to have text"));
 
-        let visit = parse_visit(
+        let visit_update = parse_visit_text(
             msg.from.as_ref().expect("message to have author").id,
             msg_text,
         );
 
-        let new = self.visits.add_visit(visit.clone()).await?;
+        let new = self.visits.upsert_visit(visit_update.clone()).await?;
 
         self.bot
             .send_message(
@@ -330,9 +334,9 @@ impl Handler {
                     } else {
                         "Обновил"
                     },
-                    visit.day,
-                    if !visit.purpose.is_empty() {
-                        format!(" чтобы {}", visit.purpose)
+                    visit_update.day,
+                    if let Some(p) = visit_update.purpose {
+                        format!(" чтобы {p}")
                     } else {
                         "".to_owned()
                     }
@@ -352,10 +356,10 @@ impl Handler {
         Ok(())
     }
 
-    async fn handle_del_visit(&self, msg: &Message) -> Result<()> {
+    async fn handle_unplan_visit(&self, msg: &Message) -> Result<()> {
         let msg_text = strip_command(msg.text().expect("message to have text"));
 
-        let visit = parse_visit(
+        let visit = parse_visit_text(
             msg.from.as_ref().expect("message to have author").id,
             msg_text,
         );
@@ -374,22 +378,30 @@ impl Handler {
     }
 
     async fn handle_check_in(&self, msg: &Message) -> Result<()> {
-        let msg_text = strip_command(msg.text().expect("message to have text"));
-        let purpose = parse_day_purpose(msg_text).1;
-        let person = msg.from.as_ref().expect("message to have author").id;
+        let person = Uid(msg.from.as_ref().expect("message to have author").id);
         let day = today();
-        self.visits
-            .check_in(Uid(person), day, purpose.to_owned())
-            .await?;
+        let purpose_raw = strip_command(msg.text().expect("message to have text"));
+        let purpose = if purpose_raw.is_empty() {
+            None
+        } else {
+            Some(purpose_raw.to_owned())
+        };
+        let visit_update = VisitUpdate {
+            person,
+            day,
+            purpose: purpose.clone(),
+            status: VisitStatus::CheckedIn,
+        };
+        self.visits.upsert_visit(visit_update).await?;
         self.bot
             .send_message(
                 msg.chat.id,
                 format!(
                     "Отметил как зашедшего{}",
-                    if !purpose.is_empty() {
-                        format!(" чтобы: {purpose}")
+                    if let Some(p) = purpose {
+                        format!(" чтобы: {p}")
                     } else {
-                        "".to_owned()
+                        "".to_string()
                     }
                 ),
             )
@@ -399,21 +411,17 @@ impl Handler {
     }
 
     async fn handle_check_out(&self, msg: &Message) -> Result<()> {
-        let msg_text = strip_command(msg.text().expect("message to have text"));
-        let visit = parse_visit(
-            msg.from.as_ref().expect("message to have author").id,
-            msg_text,
-        );
-        let updated = self.visits.check_out(visit.person, visit.day).await?;
+        let person = Uid(msg.from.as_ref().expect("message to have author").id);
+        let day = today();
+        let visit_update = VisitUpdate {
+            person,
+            day,
+            purpose: None,
+            status: VisitStatus::CheckedOut,
+        };
+        self.visits.upsert_visit(visit_update).await?;
         self.bot
-            .send_message(
-                msg.chat.id,
-                if updated {
-                    format!("Отметил как ушедшего {}", visit.day)
-                } else {
-                    format!("Не найден план на {}", visit.day)
-                },
-            )
+            .send_message(msg.chat.id, "Отметил как ушедшего")
             .reply_to(msg.id)
             .await?;
         Ok(())
