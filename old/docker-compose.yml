@@ -1,0 +1,10 @@
+services:
+  xecutrelay:
+    build: .
+    restart: unless-stopped
+    container_name: xecutrelay
+    environment:
+      - XECUT_TG_API_KEY=${XECUT_TG_API_KEY}
+    user: "1000:1001"
+    security_opt:
+      - no-new-privileges:true
