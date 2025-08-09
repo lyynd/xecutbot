@@ -1,0 +1,8 @@
+# don't forget to rename to xecut_bot.yaml
+telegram_bot:
+  bot_token: ""
+  public_chat_id: 0
+  private_chat_id: 0
+  public_channel_id: 0
+db:
+  sqlite_path: "xecut_bot.sqlite?mode=rwc"
