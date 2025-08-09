@@ -4,23 +4,7 @@ A Telegram bot for managing hackerspace visits and other things.
 
 ## Running
 
-Create a config file `xecut_bot.yaml`. For example:
-
-```yaml
-telegram_bot:
-  bot_token: ...
-  public_chat_id: ...
-  private_chat_id: ...
-  public_channel_id: ...
-db:
-  sqlite_path: "xecut_bot.sqlite"
-```
-
-Create the database and nessesary tables:
-
-```sh
-cat migrations/* | sqlite3 xecut_bot.sqlite
-```
+Create a config file `xecut_bot.yaml`. See `xecut_bot_example.yaml`.
 
 Make sure you have Rust and Cargo installed (for example with rustup).
 
