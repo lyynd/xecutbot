@@ -10,6 +10,10 @@ async fn main() -> Result<()> {
         let visits = Visits::new(&config.db)
             .await
             .expect("DB initialization success");
+        sqlx::migrate!("./migrations")
+            .run(visits.pool())
+            .await
+            .expect("Migrations applied successfully");
         let cancellation_token = visits.spawn_cleanup_task().await;
         let handler = Handler::new(config.telegram_bot, visits).await?;
         async move {
