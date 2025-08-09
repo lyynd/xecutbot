@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM visit WHERE person = ?1 AND day = ?2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "b3d044b360b7b7920faa23df46a574fad5b1d97e6fd385e95dfd552e358ffd6c"
+}

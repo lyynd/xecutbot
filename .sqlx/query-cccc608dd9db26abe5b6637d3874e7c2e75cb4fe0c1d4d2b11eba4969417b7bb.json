@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT person, day, purpose, status FROM visit WHERE day >= ?1",
+  "describe": {
+    "columns": [
+      {
+        "name": "person",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "day",
+        "ordinal": 1,
+        "type_info": "Integer"
+      },
+      {
+        "name": "purpose",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "status",
+        "ordinal": 3,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "cccc608dd9db26abe5b6637d3874e7c2e75cb4fe0c1d4d2b11eba4969417b7bb"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE visit SET purpose = ?3, status = ?4 WHERE person = ?1 AND day = ?2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "ebb6bb206f80ed71b9aa8081e3beb1be5ec2905a8f0472fdf21bb4af96d8827e"
+}

@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT purpose, status FROM visit WHERE person = ?1 AND day = ?2",
+  "describe": {
+    "columns": [
+      {
+        "name": "purpose",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "status",
+        "ordinal": 1,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "b3d00ba02b62f6afcd2ae34fdcb6cb48ee8eee7714b66675c100836d52f5bd25"
+}
