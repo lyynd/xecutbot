@@ -55,7 +55,7 @@ enum Command {
     CheckOut,
 }
 
-pub struct Handler {
+pub struct TelegramBot {
     config: TelegramBotConfig,
     bot: Bot,
     visits: Visits,
@@ -95,10 +95,10 @@ fn parse_visit_text(author: UserId, msg: &str) -> VisitUpdate {
     }
 }
 
-impl Handler {
-    pub async fn new(config: TelegramBotConfig, visits: Visits) -> Result<Arc<Handler>> {
+impl TelegramBot {
+    pub async fn new(config: TelegramBotConfig, visits: Visits) -> Result<Arc<TelegramBot>> {
         let bot = Bot::new(config.bot_token.clone());
-        Ok(Arc::new(Handler {
+        Ok(Arc::new(TelegramBot {
             config,
             bot,
             visits,

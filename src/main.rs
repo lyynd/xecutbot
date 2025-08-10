@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Parser;
-use xecut_bot::{Config, Handler, Visits};
+use xecut_bot::{Config, TelegramBot, Visits};
 
 #[derive(Parser)]
 struct Cli {
@@ -21,9 +21,9 @@ async fn main() -> Result<()> {
 
         let cancellation_token = visits.spawn_cleanup_task().await;
 
-        let handler = Handler::new(config.telegram_bot, visits).await?;
+        let telegram_bot = TelegramBot::new(config.telegram_bot, visits).await?;
 
-        handler.run().await;
+        telegram_bot.run().await;
         cancellation_token.cancel();
         Ok(())
     })
