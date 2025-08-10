@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use serde_derive::Deserialize;
 use teloxide::types::ChatId;
 
@@ -21,10 +23,10 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn new(base_name: &str) -> Result<Self, config::ConfigError> {
+    pub fn new(env_prefix: &str, config_file: PathBuf) -> Result<Self, config::ConfigError> {
         config::Config::builder()
-            .add_source(config::File::with_name(base_name))
-            .add_source(config::Environment::with_prefix(base_name))
+            .add_source(config::File::from(config_file).required(false))
+            .add_source(config::Environment::with_prefix(env_prefix))
             .build()?
             .try_deserialize()
     }
