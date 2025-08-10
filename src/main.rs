@@ -2,10 +2,10 @@ use anyhow::Result;
 use clap::Parser;
 use xecut_bot::{Config, TelegramBot, Visits};
 
-#[derive(Parser)]
+#[derive(Parser, Debug)]
 struct Cli {
     #[arg(short = 'c', long = "config", default_value = "xecut_bot")]
-    config: std::path::PathBuf,
+    config: Vec<std::path::PathBuf>,
 }
 
 #[tokio::main]

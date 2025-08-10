@@ -23,9 +23,12 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn new(env_prefix: &str, config_file: PathBuf) -> Result<Self, config::ConfigError> {
-        config::Config::builder()
-            .add_source(config::File::from(config_file).required(false))
+    pub fn new(env_prefix: &str, config_files: Vec<PathBuf>) -> Result<Self, config::ConfigError> {
+        let mut builder = config::Config::builder();
+        for config_file in config_files {
+            builder = builder.add_source(config::File::from(config_file));
+        }
+        builder
             .add_source(config::Environment::with_prefix(env_prefix))
             .build()?
             .try_deserialize()
