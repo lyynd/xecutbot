@@ -14,5 +14,6 @@
       packages = forAllSystems (system: {
         default = pkgsFor.${system}.callPackage ./default.nix { };
       });
+      nixosModules.default = import ./nixos-module.nix { inherit self; };
     };
 }
