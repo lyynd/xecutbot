@@ -47,7 +47,7 @@ async fn test_upsert_and_get_visits() {
     };
     let inserted = visits.upsert_visit(update).await.unwrap();
     assert!(inserted);
-    let visits_vec = visits.get_visits(day).await.unwrap();
+    let visits_vec = visits.get_visits(day, day).await.unwrap();
     assert_eq!(
         visits_vec,
         vec![Visit {
@@ -80,7 +80,7 @@ async fn test_upsert_update_visit() {
     };
     let inserted = visits.upsert_visit(update2).await.unwrap();
     assert!(!inserted);
-    let visits_vec = visits.get_visits(day).await.unwrap();
+    let visits_vec = visits.get_visits(day, day).await.unwrap();
     assert_eq!(
         visits_vec,
         vec![Visit {
@@ -107,7 +107,7 @@ async fn test_delete_visit() {
     assert!(inserted);
     let deleted = visits.delete_visit(person, day).await.unwrap();
     assert!(deleted);
-    let visits_vec = visits.get_visits(day).await.unwrap();
+    let visits_vec = visits.get_visits(day, day).await.unwrap();
     assert_eq!(visits_vec, vec![]);
 }
 
@@ -152,7 +152,7 @@ async fn test_cleanup() {
     xecut_bot::Visits::cleanup(visits.pool(), fixed_datetime)
         .await
         .unwrap();
-    let visits_vec = visits.get_visits(new_day).await.unwrap();
+    let visits_vec = visits.get_visits(new_day, new_day).await.unwrap();
     assert_eq!(
         visits_vec,
         vec![Visit {
@@ -162,4 +162,70 @@ async fn test_cleanup() {
             status: VisitStatus::Planned,
         }]
     );
+}
+
+#[tokio::test]
+async fn test_get_visits_range() {
+    let visits = make_visits().await;
+    let person1 = Uid::from(10);
+    let person2 = Uid::from(11);
+    let day1 = NaiveDate::from_ymd_opt(2025, 8, 7).unwrap();
+    let day2 = NaiveDate::from_ymd_opt(2025, 8, 8).unwrap();
+    let day3 = NaiveDate::from_ymd_opt(2025, 8, 9).unwrap();
+    let update1 = xecut_bot::visits::VisitUpdate {
+        person: person1,
+        day: day1,
+        purpose: Some("foo".to_string()),
+        status: VisitStatus::Planned,
+    };
+    let update2 = xecut_bot::visits::VisitUpdate {
+        person: person2,
+        day: day2,
+        purpose: Some("bar".to_string()),
+        status: VisitStatus::CheckedIn,
+    };
+    let inserted = visits.upsert_visit(update1).await.unwrap();
+    assert!(inserted);
+    let inserted = visits.upsert_visit(update2).await.unwrap();
+    assert!(inserted);
+    // Range covering both days
+    let visits_vec = visits.get_visits(day1, day2).await.unwrap();
+    assert_eq!(visits_vec.len(), 2);
+    assert!(visits_vec.contains(&Visit {
+        person: person1,
+        day: day1,
+        purpose: "foo".to_string(),
+        status: VisitStatus::Planned,
+    }));
+    assert!(visits_vec.contains(&Visit {
+        person: person2,
+        day: day2,
+        purpose: "bar".to_string(),
+        status: VisitStatus::CheckedIn,
+    }));
+    // Single day: day1
+    let visits_day1 = visits.get_visits(day1, day1).await.unwrap();
+    assert_eq!(
+        visits_day1,
+        vec![Visit {
+            person: person1,
+            day: day1,
+            purpose: "foo".to_string(),
+            status: VisitStatus::Planned,
+        }]
+    );
+    // Single day: day2
+    let visits_day2 = visits.get_visits(day2, day2).await.unwrap();
+    assert_eq!(
+        visits_day2,
+        vec![Visit {
+            person: person2,
+            day: day2,
+            purpose: "bar".to_string(),
+            status: VisitStatus::CheckedIn,
+        }]
+    );
+    // Range with no visits
+    let visits_none = visits.get_visits(day3, day3).await.unwrap();
+    assert_eq!(visits_none, vec![]);
 }

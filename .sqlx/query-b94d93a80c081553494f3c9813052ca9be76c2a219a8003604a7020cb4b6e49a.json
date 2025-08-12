@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT person, day, purpose, status FROM visit WHERE day >= ?1",
+  "query": "SELECT person, day, purpose, status FROM visit WHERE day >= ?1 AND day <= ?2",
   "describe": {
     "columns": [
       {
@@ -25,7 +25,7 @@
       }
     ],
     "parameters": {
-      "Right": 1
+      "Right": 2
     },
     "nullable": [
       false,
@@ -34,5 +34,5 @@
       false
     ]
   },
-  "hash": "cccc608dd9db26abe5b6637d3874e7c2e75cb4fe0c1d4d2b11eba4969417b7bb"
+  "hash": "b94d93a80c081553494f3c9813052ca9be76c2a219a8003604a7020cb4b6e49a"
 }

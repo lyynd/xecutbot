@@ -67,11 +67,13 @@ impl Visits {
         result
     }
 
-    pub async fn get_visits(&self, from: NaiveDate) -> Result<Vec<Visit>> {
-        let current_day = from.num_days_from_ce();
+    pub async fn get_visits(&self, from: NaiveDate, to: NaiveDate) -> Result<Vec<Visit>> {
+        let from_day = from.num_days_from_ce();
+        let to_day: i32 = to.num_days_from_ce();
         Ok(sqlx::query!(
-            "SELECT person, day, purpose, status FROM visit WHERE day >= ?1",
-            current_day
+            "SELECT person, day, purpose, status FROM visit WHERE day >= ?1 AND day <= ?2",
+            from_day,
+            to_day,
         )
         .map(|r| {
             let day = chrono::NaiveDate::from_num_days_from_ce_opt(r.day as i32).unwrap();
