@@ -9,7 +9,7 @@ use teloxide::{
     dispatching::dialogue::GetChatId as _,
     prelude::*,
     sugar::request::{RequestLinkPreviewExt, RequestReplyExt as _},
-    types::ParseMode,
+    types::{ParseMode, ReactionType},
     utils::command::BotCommands,
 };
 
@@ -257,6 +257,7 @@ impl TelegramBot {
             self.bot
                 .send_message(chat_id, "❌ Нужно быть резидентом")
                 .reply_to(msg.id)
+                .disable_notification(true)
                 .await?;
             return Ok(());
         }
@@ -266,6 +267,7 @@ impl TelegramBot {
             self.bot
                 .send_message(chat_id, "❌ Надо ответить на сообщение")
                 .reply_to(msg.id)
+                .disable_notification(true)
                 .await?;
             return Ok(());
         };
@@ -306,6 +308,7 @@ impl TelegramBot {
             )
             .parse_mode(ParseMode::Html)
             .disable_link_preview(true)
+            .disable_notification(true)
             .await?;
 
         Ok(())
@@ -384,6 +387,7 @@ impl TelegramBot {
             .send_message(msg.chat.id, reply)
             .parse_mode(ParseMode::Html)
             .disable_link_preview(true)
+            .disable_notification(true)
             .await?;
 
         Ok(())
@@ -446,6 +450,7 @@ impl TelegramBot {
             .send_message(msg.chat.id, self.format_visits(visits, &details))
             .parse_mode(ParseMode::Html)
             .disable_link_preview(true)
+            .disable_notification(true)
             .await?;
 
         Ok(())
@@ -480,6 +485,7 @@ impl TelegramBot {
                 ),
             )
             .reply_to(msg.id)
+            .disable_notification(true)
             .await?;
 
         if msg_text == "panic" {
@@ -504,11 +510,10 @@ impl TelegramBot {
         self.visits.delete_visit(visit.person, visit.day).await?;
 
         self.bot
-            .send_message(
-                msg.chat.id,
-                format!("✅🤔 Удалил план зайти в хакспейс {}", visit.day),
-            )
-            .reply_to(msg.id)
+            .set_message_reaction(msg.chat.id, msg.id)
+            .reaction(vec![ReactionType::Emoji {
+                emoji: "✍".to_owned(),
+            }])
             .await?;
 
         Ok(())
@@ -531,18 +536,10 @@ impl TelegramBot {
         };
         self.visits.upsert_visit(visit_update).await?;
         self.bot
-            .send_message(
-                msg.chat.id,
-                format!(
-                    "✅👷 Отметил как зашедшего{}",
-                    if let Some(p) = purpose {
-                        format!(" с комментарием: \"{p}\"")
-                    } else {
-                        "".to_string()
-                    }
-                ),
-            )
-            .reply_to(msg.id)
+            .set_message_reaction(msg.chat.id, msg.id)
+            .reaction(vec![ReactionType::Emoji {
+                emoji: "✍".to_owned(),
+            }])
             .await?;
         Ok(())
     }
@@ -558,8 +555,10 @@ impl TelegramBot {
         };
         self.visits.upsert_visit(visit_update).await?;
         self.bot
-            .send_message(msg.chat.id, "✅🌆 Отметил как ушедшего")
-            .reply_to(msg.id)
+            .set_message_reaction(msg.chat.id, msg.id)
+            .reaction(vec![ReactionType::Emoji {
+                emoji: "✍".to_owned(),
+            }])
             .await?;
         Ok(())
     }
