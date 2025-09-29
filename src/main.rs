@@ -19,12 +19,17 @@ async fn main() -> Result<()> {
 
         sqlx::migrate!("./migrations").run(visits.pool()).await?;
 
-        let cancellation_token = visits.spawn_cleanup_task().await;
+        let cleanup_ct = visits.spawn_cleanup_task().await;
 
         let telegram_bot = TelegramBot::new(config.telegram_bot, visits).await?;
 
+        let live_update_ct = telegram_bot.spawn_update_live_task().await;
+
         telegram_bot.run().await;
-        cancellation_token.cancel();
+
+        live_update_ct.cancel();
+        cleanup_ct.cancel();
+
         Ok(())
     })
     .await?

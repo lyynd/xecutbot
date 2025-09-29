@@ -1,15 +1,22 @@
 use anyhow::Result;
-use chrono::{Locale, NaiveDate, TimeDelta};
+use chrono::{Local, Locale, NaiveDate, TimeDelta};
 use futures::FutureExt;
 use itertools::Itertools;
-use std::{collections::HashMap, panic::AssertUnwindSafe, sync::Arc};
+use sqlx::SqlitePool;
+use std::{
+    collections::HashMap,
+    panic::AssertUnwindSafe,
+    sync::{Arc, RwLock},
+    time::Duration,
+};
+use tokio_util::sync::CancellationToken;
 
-use log::{debug, info};
+use log::{debug, error, info};
 use teloxide::{
     dispatching::dialogue::GetChatId as _,
     prelude::*,
     sugar::request::{RequestLinkPreviewExt, RequestReplyExt as _},
-    types::{ParseMode, ReactionType},
+    types::{MessageId, ParseMode, ReactionType},
     utils::command::BotCommands,
 };
 
@@ -57,12 +64,8 @@ enum Command {
     CheckIn,
     #[command(description = "🌆 Отметиться как ушедший")]
     CheckOut,
-}
-
-pub struct TelegramBot {
-    config: TelegramBotConfig,
-    bot: Bot,
-    visits: Visits,
+    #[command(description = "🔃 Сделать закреп с текущей информацией о спейсе")]
+    LiveStatus,
 }
 
 fn strip_command(text: &str) -> &str {
@@ -130,14 +133,62 @@ struct PersonDetails {
     link: String,
 }
 
+const LIVE_UPDATE_INTERVAL: Duration = Duration::from_secs(2);
+
+pub struct TelegramBot {
+    config: TelegramBotConfig,
+    bot: Bot,
+    visits: Visits,
+    status_message_id: RwLock<Option<MessageId>>,
+}
+
 impl TelegramBot {
     pub async fn new(config: TelegramBotConfig, visits: Visits) -> Result<Arc<TelegramBot>> {
         let bot = Bot::new(config.bot_token.clone());
+        let status_message_id = RwLock::new(Self::load_status_message_id(visits.pool()).await?);
         Ok(Arc::new(TelegramBot {
             config,
             bot,
             visits,
+            status_message_id,
         }))
+    }
+
+    pub async fn spawn_update_live_task(self: &Arc<Self>) -> CancellationToken {
+        let cancellation_token = CancellationToken::new();
+        let result = cancellation_token.clone();
+        let self_clone = self.clone();
+
+        tokio::task::spawn(async move {
+            let mut interval = tokio::time::interval(LIVE_UPDATE_INTERVAL);
+
+            let mut last_live_status = None;
+
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {}
+                    _ = cancellation_token.cancelled() => { break }
+                };
+                log::trace!("Updating status message");
+                let new_live_status = match self_clone.get_status().await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        error!("Error getting live status: {}", e);
+                        continue;
+                    }
+                };
+                if last_live_status.is_none_or(|ref v| v != &new_live_status)
+                    && let Err(e) = self_clone
+                        .update_live_status_message(&new_live_status)
+                        .await
+                {
+                    info!("Error updating status message: {}", e);
+                }
+                last_live_status = Some(new_live_status);
+            }
+        });
+
+        result
     }
 
     pub async fn run(self: Arc<Self>) {
@@ -190,6 +241,7 @@ impl TelegramBot {
             Command::UnplanVisit => self.handle_unplan_visit(msg).await,
             Command::CheckIn => self.handle_check_in(msg).await,
             Command::CheckOut => self.handle_check_out(msg).await,
+            Command::LiveStatus => self.handle_live_status(msg).await,
         }
     }
 
@@ -335,7 +387,7 @@ impl TelegramBot {
         )
     }
 
-    async fn handle_status(&self, msg: &Message) -> Result<()> {
+    async fn get_status(&self) -> Result<String> {
         let today = today();
         let mut visits = self.visits.get_visits(today, today).await?;
 
@@ -345,7 +397,7 @@ impl TelegramBot {
 
         visits.sort_by_key(|v| if details[&v.person].resident { 0 } else { 1 });
 
-        let mut reply = String::new();
+        let mut status = String::new();
 
         let checked_in = visits
             .iter()
@@ -354,11 +406,11 @@ impl TelegramBot {
             .join("\n");
 
         if !checked_in.is_empty() {
-            reply.push_str("🟢 В хакспейсе сейчас кто-то есть, так что можно зайти.\n\n");
-            reply.push_str("👷 Сейчас в хакспейсе:\n");
-            reply.push_str(&checked_in);
+            status.push_str("🟢 В хакспейсе сейчас кто-то есть, так что можно зайти.\n\n");
+            status.push_str("👷 Сейчас в хакспейсе:\n");
+            status.push_str(&checked_in);
         } else {
-            reply.push_str("🔴 В хакспейсе сейчас никого нет, можешь попробовать спросить, может кто-то из резидентов захочет прийти.");
+            status.push_str("🔴 В хакспейсе сейчас никого нет, можешь попробовать спросить, может кто-то из резидентов захочет прийти.");
         }
 
         let planned = visits
@@ -368,8 +420,8 @@ impl TelegramBot {
             .join("\n");
 
         if !planned.is_empty() {
-            reply.push_str("\n\n🗓️ Планировали зайти:\n");
-            reply.push_str(&planned);
+            status.push_str("\n\n🗓️ Планировали зайти:\n");
+            status.push_str(&planned);
         }
 
         let left = visits
@@ -379,12 +431,39 @@ impl TelegramBot {
             .join("\n");
 
         if !left.is_empty() {
-            reply.push_str("\n\n🌆 Уже ушли:\n");
-            reply.push_str(&left);
+            status.push_str("\n\n🌆 Уже ушли:\n");
+            status.push_str(&left);
         }
 
+        Ok(status)
+    }
+
+    async fn handle_status(&self, msg: &Message) -> Result<()> {
+        if msg
+            .chat_id()
+            .is_some_and(|c| c == self.config.public_chat_id)
+            && let Some(msg_id) = self.get_status_message_id()
+        {
+            self.bot
+                .send_message(
+                    msg.chat.id,
+                    format!(
+                        "Посмотри в <a href=\"{}\">закрепе</a>",
+                        Message::url_of(self.config.public_chat_id, None, msg_id)
+                            .expect("should be able to create url of live status message")
+                    ),
+                )
+                .parse_mode(ParseMode::Html)
+                .disable_link_preview(true)
+                .disable_notification(true)
+                .await?;
+            return Ok(());
+        }
+
+        let status = self.get_status().await?;
+
         self.bot
-            .send_message(msg.chat.id, reply)
+            .send_message(msg.chat.id, status)
             .parse_mode(ParseMode::Html)
             .disable_link_preview(true)
             .disable_notification(true)
@@ -446,13 +525,122 @@ impl TelegramBot {
             .fetch_persons_details(visits.iter().map(|v| v.person))
             .await?;
 
+        let formated_visits = self.format_visits(visits, &details);
+
         self.bot
-            .send_message(msg.chat.id, self.format_visits(visits, &details))
+            .send_message(msg.chat.id, formated_visits)
             .parse_mode(ParseMode::Html)
             .disable_link_preview(true)
             .disable_notification(true)
             .await?;
 
+        Ok(())
+    }
+
+    async fn load_status_message_id(pool: &SqlitePool) -> Result<Option<MessageId>> {
+        let message_id = sqlx::query!("SELECT message_id FROM status_messages")
+            .map(|r| r.message_id)
+            .fetch_optional(pool)
+            .await?
+            .map(|id| MessageId(id as i32));
+        Ok(message_id)
+    }
+
+    async fn save_status_message_id(pool: &SqlitePool, id: Option<MessageId>) -> Result<()> {
+        let mut tx = pool.begin().await?;
+        sqlx::query!("DELETE FROM status_messages")
+            .execute(&mut *tx)
+            .await?;
+        if let Some(id) = id {
+            sqlx::query!("INSERT INTO status_messages (message_id) VALUES (?1)", id.0)
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn set_status_message_id(&self, id: Option<MessageId>) -> Result<()> {
+        Self::save_status_message_id(self.visits.pool(), id).await?;
+        *self.status_message_id.write().unwrap() = id;
+        Ok(())
+    }
+
+    fn get_status_message_id(&self) -> Option<MessageId> {
+        *self.status_message_id.read().unwrap()
+    }
+
+    async fn handle_live_status(&self, msg: &Message) -> Result<()> {
+        let Some(chat_id) = msg.chat_id() else {
+            debug!("Message does not have a chat");
+            return Ok(());
+        };
+
+        if chat_id != self.config.public_chat_id {
+            debug!("Message not in the public chat");
+            return Ok(());
+        }
+
+        if !self
+            .is_resident(msg.from.as_ref().expect("message to have from").id)
+            .await?
+        {
+            debug!("User is not a private chat member");
+            self.bot
+                .send_message(chat_id, "❌ Нужно быть резидентом")
+                .reply_to(msg.id)
+                .disable_notification(true)
+                .await?;
+            return Ok(());
+        }
+
+        if let Some(msg_id) = self.get_status_message_id() {
+            self.bot
+                .delete_message(msg.chat_id().unwrap(), msg_id)
+                .await?;
+            self.set_status_message_id(None).await?;
+        }
+
+        let msg_id = self
+            .bot
+            .send_message(
+                msg.chat_id().unwrap(),
+                Self::get_full_live_status(&self.get_status().await?),
+            )
+            .parse_mode(ParseMode::Html)
+            .disable_link_preview(true)
+            .disable_notification(true)
+            .await?
+            .id;
+        self.set_status_message_id(Some(msg_id)).await?;
+
+        self.bot.pin_chat_message(chat_id, msg_id).await?;
+
+        Ok(())
+    }
+
+    fn get_full_live_status(live_status: &str) -> String {
+        live_status.to_owned()
+            + "\n\nОбновлено: "
+            + &Local::now()
+                .format_localized("%c", Locale::ru_RU)
+                .to_string()
+    }
+
+    async fn update_live_status_message(&self, live_status: &str) -> Result<()> {
+        let Some(msg_id) = self.get_status_message_id() else {
+            return Ok(());
+        };
+
+        self.bot
+            .edit_message_text(
+                self.config.public_chat_id,
+                msg_id,
+                Self::get_full_live_status(live_status),
+            )
+            .parse_mode(ParseMode::Html)
+            .disable_link_preview(true)
+            .await?;
         Ok(())
     }
 

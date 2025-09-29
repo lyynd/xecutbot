@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO status_messages (message_id) VALUES (?1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "d9c1c3ac0b9adf19af601851c61bc7384a7394528023ee7d6ddb30e76f8f6b62"
+}

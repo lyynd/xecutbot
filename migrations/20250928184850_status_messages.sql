@@ -1,0 +1,3 @@
+CREATE TABLE IF NOT EXISTS status_messages (
+    message_id INTEGER NOT NULL PRIMARY KEY
+);

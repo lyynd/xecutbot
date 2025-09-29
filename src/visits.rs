@@ -29,6 +29,7 @@ pub struct VisitUpdate {
     pub status: VisitStatus,
 }
 
+#[derive(Debug, Clone)]
 pub struct Visits {
     pool: SqlitePool,
 }
