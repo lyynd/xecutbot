@@ -11,7 +11,6 @@ use std::{
 };
 use tokio_util::sync::CancellationToken;
 
-use log::{debug, error, info};
 use teloxide::{
     dispatching::dialogue::GetChatId as _,
     prelude::*,
@@ -173,7 +172,7 @@ impl TelegramBot {
                 let new_live_status = match self_clone.get_status().await {
                     Ok(s) => s,
                     Err(e) => {
-                        error!("Error getting live status: {}", e);
+                        log::error!("Error getting live status: {}", e);
                         continue;
                     }
                 };
@@ -182,7 +181,7 @@ impl TelegramBot {
                         .update_live_status_message(&new_live_status)
                         .await
                 {
-                    info!("Error updating status message: {}", e);
+                    log::info!("Error updating status message: {}", e);
                 }
                 last_live_status = Some(new_live_status);
             }
@@ -192,7 +191,7 @@ impl TelegramBot {
     }
 
     pub async fn run(self: Arc<Self>) {
-        info!("Starting Telegram bot");
+        log::info!("Starting Telegram bot");
 
         if let Err(e) = self.bot.set_my_commands(Command::bot_commands()).await {
             log::error!("Can't set commands: {e}");
@@ -290,12 +289,12 @@ impl TelegramBot {
 
     async fn handle_post_live(&self, msg: &Message) -> Result<()> {
         let Some(chat_id) = msg.chat_id() else {
-            debug!("Message does not have a chat");
+            log::debug!("Message does not have a chat");
             return Ok(());
         };
 
         if chat_id != self.config.public_chat_id {
-            debug!("Message not in the public chat");
+            log::debug!("Message not in the public chat");
             return Ok(());
         }
 
@@ -303,7 +302,7 @@ impl TelegramBot {
             .is_resident(msg.from.as_ref().expect("message to have from").id)
             .await?
         {
-            debug!("User is not a private chat member");
+            log::debug!("User is not a private chat member");
             self.bot
                 .send_message(chat_id, "❌ Нужно быть резидентом")
                 .reply_to(msg.id)
@@ -313,7 +312,7 @@ impl TelegramBot {
         }
 
         let Some(original_message) = msg.reply_to_message() else {
-            debug!("Message is not a reply");
+            log::debug!("Message is not a reply");
             self.bot
                 .send_message(chat_id, "❌ Надо ответить на сообщение")
                 .reply_to(msg.id)
@@ -332,7 +331,7 @@ impl TelegramBot {
             .disable_link_preview(true)
             .await?;
 
-        debug!("Message posted");
+        log::debug!("Message posted");
 
         let forwarded_message_url = self
             .bot
@@ -341,7 +340,7 @@ impl TelegramBot {
             .url()
             .expect("forwarded message to have URL");
 
-        debug!("Original message forwarded");
+        log::debug!("Original message forwarded");
 
         let channel_name = self
             .bot
@@ -570,12 +569,12 @@ impl TelegramBot {
 
     async fn handle_live_status(&self, msg: &Message) -> Result<()> {
         let Some(chat_id) = msg.chat_id() else {
-            debug!("Message does not have a chat");
+            log::debug!("Message does not have a chat");
             return Ok(());
         };
 
         if chat_id != self.config.public_chat_id {
-            debug!("Message not in the public chat");
+            log::debug!("Message not in the public chat");
             return Ok(());
         }
 
@@ -583,7 +582,7 @@ impl TelegramBot {
             .is_resident(msg.from.as_ref().expect("message to have from").id)
             .await?
         {
-            debug!("User is not a private chat member");
+            log::debug!("User is not a private chat member");
             self.bot
                 .send_message(chat_id, "❌ Нужно быть резидентом")
                 .reply_to(msg.id)
