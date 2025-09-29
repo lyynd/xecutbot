@@ -611,7 +611,10 @@ impl TelegramBot {
             .id;
         self.set_status_message_id(Some(msg_id)).await?;
 
-        self.bot.pin_chat_message(chat_id, msg_id).await?;
+        self.bot
+            .pin_chat_message(chat_id, msg_id)
+            .disable_notification(true)
+            .await?;
 
         Ok(())
     }
