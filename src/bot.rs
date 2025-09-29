@@ -289,8 +289,6 @@ impl TelegramBot {
     }
 
     async fn handle_post_live(&self, msg: &Message) -> Result<()> {
-        debug!("Got message");
-
         let Some(chat_id) = msg.chat_id() else {
             debug!("Message does not have a chat");
             return Ok(());
