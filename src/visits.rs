@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use crate::{bot::Uid, config::DbConfig};
 use anyhow::Result;
-use chrono::{DateTime, Datelike, Local, NaiveDate};
+use chrono::{Datelike, NaiveDate};
 use sqlx::sqlite::SqlitePool;
 use tokio_util::sync::CancellationToken;
 
@@ -59,7 +59,7 @@ impl Visits {
                     _ = cancellation_token.cancelled() => { break }
                 };
                 log::debug!("Visits cleanup task running");
-                Self::cleanup(&pool_clone, Local::now())
+                Self::cleanup(&pool_clone, crate::utils::now())
                     .await
                     .expect("successful cleanup");
             }
@@ -149,8 +149,8 @@ impl Visits {
             > 0)
     }
 
-    pub async fn cleanup(pool: &SqlitePool, now: DateTime<Local>) -> Result<()> {
-        let current_day = now.date_naive().num_days_from_ce();
+    pub async fn cleanup(pool: &SqlitePool, now: impl Datelike) -> Result<()> {
+        let current_day = now.num_days_from_ce();
         let cutoff = current_day - VISIT_HISTORY_DAYS;
 
         sqlx::query!("DELETE FROM visit WHERE day < ?1", cutoff)

@@ -148,7 +148,8 @@ async fn test_cleanup() {
         .and_hms_opt(0, 0, 0)
         .unwrap();
     let offset = *chrono::Local::now().offset();
-    let fixed_datetime = chrono::DateTime::from_naive_utc_and_offset(cleanup_date, offset);
+    let fixed_datetime =
+        chrono::DateTime::<chrono::FixedOffset>::from_naive_utc_and_offset(cleanup_date, offset);
     xecut_bot::Visits::cleanup(visits.pool(), fixed_datetime)
         .await
         .unwrap();

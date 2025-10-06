@@ -1,5 +1,5 @@
 use anyhow::Result;
-use chrono::{Local, Locale, NaiveDate, TimeDelta};
+use chrono::{Locale, NaiveDate, TimeDelta};
 use futures::FutureExt;
 use itertools::Itertools;
 use sqlx::SqlitePool;
@@ -631,8 +631,8 @@ impl TelegramBot {
     fn get_full_live_status(live_status: &str) -> String {
         live_status.to_owned()
             + "\n\nОбновлено: "
-            + &Local::now()
-                .format_localized("%c", Locale::ru_RU)
+            + &crate::utils::now()
+                .format_localized("%c %Z", Locale::ru_RU)
                 .to_string()
     }
 
