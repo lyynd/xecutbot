@@ -593,7 +593,8 @@ impl TelegramBot {
 
         if let Some(msg_id) = self.get_status_message_id() {
             self.bot
-                .delete_message(msg.chat_id().unwrap(), msg_id)
+                .unpin_chat_message(msg.chat_id().unwrap())
+                .message_id(msg_id)
                 .await?;
             self.set_status_message_id(None).await?;
         }
