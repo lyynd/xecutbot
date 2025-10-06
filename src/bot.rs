@@ -402,12 +402,20 @@ impl TelegramBot {
             .map(|v| self.format_visit_without_status(v, &details[&v.person]))
             .join("\n");
 
-        if !checked_in.is_empty() {
-            status.push_str("🟢 Хакспейс открыт\n\n");
-            status.push_str("👷 Сейчас в хакспейсе:\n");
-            status.push_str(&checked_in);
+        let is_open = !checked_in.is_empty();
+
+        if is_open {
+            status.push_str("🟢 Хакспейс сейчас открыт");
         } else {
-            status.push_str("🔴 Хакспейс закрыт");
+            status.push_str("🔒 Хакспейс сейчас закрыт");
+            status.push_str(
+                "\n\n💡 Если хочешь зайти, можно спросить в чате, возможно кто-то из резидентов может прийти.",
+            );
+        }
+
+        if !checked_in.is_empty() {
+            status.push_str("\n\n👷 Сейчас в хакспейсе:\n");
+            status.push_str(&checked_in);
         }
 
         let planned = visits
