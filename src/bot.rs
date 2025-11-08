@@ -287,34 +287,46 @@ impl TelegramBot {
         )
     }
 
-    async fn handle_post_live(&self, msg: &Message) -> Result<()> {
-        let Some(chat_id) = msg.chat_id() else {
-            log::debug!("Message does not have a chat");
-            return Ok(());
-        };
-
+    fn check_is_public_chat_msg(&self, msg: &Message) -> Option<ChatId> {
+        let chat_id = msg.chat_id().expect("message to have chat id");
         if chat_id != self.config.public_chat_id {
-            log::debug!("Message not in the public chat");
-            return Ok(());
+            log::debug!("check_is_public_chat_msg failed: {:?}", msg);
+            return None;
         }
+        Some(chat_id)
+    }
 
+    async fn check_author_is_resident(&self, msg: &Message) -> Result<bool> {
         if !self
-            .is_resident(msg.from.as_ref().expect("message to have from").id)
+            .is_resident(msg.from.as_ref().expect("message to have author").id)
             .await?
         {
-            log::debug!("User is not a private chat member");
+            log::debug!("check_author_is_resident failed: {:?}", msg);
             self.bot
-                .send_message(chat_id, "❌ Нужно быть резидентом")
+                .send_message(
+                    msg.chat_id().expect("message to have chat id"),
+                    "❌ Нужно быть резидентом",
+                )
                 .reply_to(msg.id)
                 .disable_notification(true)
                 .await?;
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
+    async fn handle_post_live(&self, msg: &Message) -> Result<()> {
+        let Some(chat_id) = self.check_is_public_chat_msg(msg) else {
+            return Ok(());
+        };
+        if !self.check_author_is_resident(msg).await? {
             return Ok(());
         }
 
         let Some(original_message) = msg.reply_to_message() else {
-            log::debug!("Message is not a reply");
+            log::debug!("message is not a reply: {:?}", msg);
             self.bot
-                .send_message(chat_id, "❌ Надо ответить на сообщение")
+                .send_message(chat_id, "❌ Нужно ответить на сообщение")
                 .reply_to(msg.id)
                 .disable_notification(true)
                 .await?;
@@ -331,7 +343,7 @@ impl TelegramBot {
             .disable_link_preview(true)
             .await?;
 
-        log::debug!("Message posted");
+        log::debug!("message posted");
 
         let forwarded_message_url = self
             .bot
@@ -340,7 +352,7 @@ impl TelegramBot {
             .url()
             .expect("forwarded message to have URL");
 
-        log::debug!("Original message forwarded");
+        log::debug!("original message forwarded");
 
         let channel_name = self
             .bot
@@ -576,32 +588,16 @@ impl TelegramBot {
     }
 
     async fn handle_live_status(&self, msg: &Message) -> Result<()> {
-        let Some(chat_id) = msg.chat_id() else {
-            log::debug!("Message does not have a chat");
+        let Some(chat_id) = self.check_is_public_chat_msg(msg) else {
             return Ok(());
         };
-
-        if chat_id != self.config.public_chat_id {
-            log::debug!("Message not in the public chat");
-            return Ok(());
-        }
-
-        if !self
-            .is_resident(msg.from.as_ref().expect("message to have from").id)
-            .await?
-        {
-            log::debug!("User is not a private chat member");
-            self.bot
-                .send_message(chat_id, "❌ Нужно быть резидентом")
-                .reply_to(msg.id)
-                .disable_notification(true)
-                .await?;
+        if !self.check_author_is_resident(msg).await? {
             return Ok(());
         }
 
         if let Some(msg_id) = self.get_status_message_id() {
             self.bot
-                .unpin_chat_message(msg.chat_id().unwrap())
+                .unpin_chat_message(chat_id)
                 .message_id(msg_id)
                 .await?;
             self.set_status_message_id(None).await?;
@@ -610,7 +606,7 @@ impl TelegramBot {
         let msg_id = self
             .bot
             .send_message(
-                msg.chat_id().unwrap(),
+                chat_id,
                 Self::get_full_live_status(&self.get_status().await?),
             )
             .parse_mode(ParseMode::Html)
@@ -650,6 +646,7 @@ impl TelegramBot {
             .parse_mode(ParseMode::Html)
             .disable_link_preview(true)
             .await?;
+
         Ok(())
     }
 
@@ -690,9 +687,19 @@ impl TelegramBot {
         }
 
         if msg_text == "error" {
-            return Err(anyhow::anyhow!("ayayaya"));
+            anyhow::bail!("ayayaya");
         }
 
+        Ok(())
+    }
+
+    async fn acknowledge_message(&self, msg: &Message) -> Result<()> {
+        self.bot
+            .set_message_reaction(msg.chat.id, msg.id)
+            .reaction(vec![ReactionType::Emoji {
+                emoji: "✍".to_owned(),
+            }])
+            .await?;
         Ok(())
     }
 
@@ -706,12 +713,7 @@ impl TelegramBot {
 
         self.visits.delete_visit(visit.person, visit.day).await?;
 
-        self.bot
-            .set_message_reaction(msg.chat.id, msg.id)
-            .reaction(vec![ReactionType::Emoji {
-                emoji: "✍".to_owned(),
-            }])
-            .await?;
+        self.acknowledge_message(msg).await?;
 
         Ok(())
     }
@@ -725,38 +727,36 @@ impl TelegramBot {
         } else {
             Some(purpose_raw.to_owned())
         };
+
         let visit_update = VisitUpdate {
             person,
             day,
             purpose: purpose.clone(),
             status: VisitStatus::CheckedIn,
         };
+
         self.visits.upsert_visit(visit_update).await?;
-        self.bot
-            .set_message_reaction(msg.chat.id, msg.id)
-            .reaction(vec![ReactionType::Emoji {
-                emoji: "✍".to_owned(),
-            }])
-            .await?;
+
+        self.acknowledge_message(msg).await?;
+
         Ok(())
     }
 
     async fn handle_check_out(&self, msg: &Message) -> Result<()> {
         let person = Uid(msg.from.as_ref().expect("message to have author").id);
         let day = today();
+
         let visit_update = VisitUpdate {
             person,
             day,
             purpose: None,
             status: VisitStatus::CheckedOut,
         };
+
         self.visits.upsert_visit(visit_update).await?;
-        self.bot
-            .set_message_reaction(msg.chat.id, msg.id)
-            .reaction(vec![ReactionType::Emoji {
-                emoji: "✍".to_owned(),
-            }])
-            .await?;
+
+        self.acknowledge_message(msg).await?;
+
         Ok(())
     }
 }
