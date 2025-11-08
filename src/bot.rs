@@ -63,6 +63,8 @@ enum Command {
     CheckIn,
     #[command(description = "🌆 Отметиться как ушедший")]
     CheckOut,
+    #[command(description = "🌒 Закрыть хакспейс")]
+    Close,
     #[command(description = "🔃 Сделать закреп с текущей информацией о спейсе")]
     LiveStatus,
 }
@@ -240,6 +242,7 @@ impl TelegramBot {
             Command::UnplanVisit => self.handle_unplan_visit(msg).await,
             Command::CheckIn => self.handle_check_in(msg).await,
             Command::CheckOut => self.handle_check_out(msg).await,
+            Command::Close => self.handle_close(msg).await,
             Command::LiveStatus => self.handle_live_status(msg).await,
         }
     }
@@ -287,13 +290,21 @@ impl TelegramBot {
         )
     }
 
-    fn check_is_public_chat_msg(&self, msg: &Message) -> Option<ChatId> {
+    async fn check_is_public_chat_msg(&self, msg: &Message) -> Result<Option<ChatId>> {
         let chat_id = msg.chat_id().expect("message to have chat id");
         if chat_id != self.config.public_chat_id {
             log::debug!("check_is_public_chat_msg failed: {:?}", msg);
-            return None;
+            self.bot
+                .send_message(
+                    msg.chat_id().expect("message to have chat id"),
+                    "❌ Нужно написать в публичный чат спейса",
+                )
+                .reply_to(msg.id)
+                .disable_notification(true)
+                .await?;
+            return Ok(None);
         }
-        Some(chat_id)
+        Ok(Some(chat_id))
     }
 
     async fn check_author_is_resident(&self, msg: &Message) -> Result<bool> {
@@ -316,7 +327,7 @@ impl TelegramBot {
     }
 
     async fn handle_post_live(&self, msg: &Message) -> Result<()> {
-        let Some(chat_id) = self.check_is_public_chat_msg(msg) else {
+        let Some(chat_id) = self.check_is_public_chat_msg(msg).await? else {
             return Ok(());
         };
         if !self.check_author_is_resident(msg).await? {
@@ -588,7 +599,7 @@ impl TelegramBot {
     }
 
     async fn handle_live_status(&self, msg: &Message) -> Result<()> {
-        let Some(chat_id) = self.check_is_public_chat_msg(msg) else {
+        let Some(chat_id) = self.check_is_public_chat_msg(msg).await? else {
             return Ok(());
         };
         if !self.check_author_is_resident(msg).await? {
@@ -754,6 +765,23 @@ impl TelegramBot {
         };
 
         self.visits.upsert_visit(visit_update).await?;
+
+        self.acknowledge_message(msg).await?;
+
+        Ok(())
+    }
+
+    async fn handle_close(&self, msg: &Message) -> Result<()> {
+        if self.check_is_public_chat_msg(msg).await?.is_none() {
+            return Ok(());
+        };
+        if !self.check_author_is_resident(msg).await? {
+            return Ok(());
+        }
+
+        let day = today();
+
+        self.visits.check_out_everybody(day).await?;
 
         self.acknowledge_message(msg).await?;
 

@@ -135,6 +135,19 @@ impl Visits {
         Ok(inserted)
     }
 
+    pub async fn check_out_everybody(&self, day: NaiveDate) -> Result<()> {
+        let day = day.num_days_from_ce();
+        let status_int: i32 = VisitStatus::CheckedOut.into();
+        sqlx::query!(
+            "UPDATE visit SET status = ?1 WHERE day = ?2",
+            status_int,
+            day,
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     pub async fn delete_visit(&self, person: Uid, day: NaiveDate) -> Result<bool> {
         let person: i64 = person.into();
         let day = day.num_days_from_ce();
