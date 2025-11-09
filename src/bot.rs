@@ -12,7 +12,6 @@ use std::{
 use tokio_util::sync::CancellationToken;
 
 use teloxide::{
-    dispatching::dialogue::GetChatId as _,
     prelude::*,
     sugar::request::{RequestLinkPreviewExt, RequestReplyExt as _},
     types::{MessageId, ParseMode, ReactionType},
@@ -92,10 +91,10 @@ fn parse_day_purpose(text: &str) -> (NaiveDate, &str) {
     (date, purpose.trim())
 }
 
-fn parse_visit_text(author: UserId, msg: &str) -> VisitUpdate {
+fn parse_visit_text(author: Uid, msg: &str) -> VisitUpdate {
     let (day, purpose) = parse_day_purpose(msg);
     VisitUpdate {
-        person: Uid(author),
+        person: author,
         day,
         purpose: if purpose.is_empty() {
             None
@@ -291,14 +290,11 @@ impl TelegramBot {
     }
 
     async fn check_is_public_chat_msg(&self, msg: &Message) -> Result<Option<ChatId>> {
-        let chat_id = msg.chat_id().expect("message to have chat id");
+        let chat_id = msg.chat.id;
         if chat_id != self.config.public_chat_id {
             log::debug!("check_is_public_chat_msg failed: {:?}", msg);
             self.bot
-                .send_message(
-                    msg.chat_id().expect("message to have chat id"),
-                    "❌ Нужно написать в публичный чат спейса",
-                )
+                .send_message(msg.chat.id, "❌ Нужно написать в публичный чат спейса")
                 .reply_to(msg.id)
                 .disable_notification(true)
                 .await?;
@@ -314,10 +310,7 @@ impl TelegramBot {
         {
             log::debug!("check_author_is_resident failed: {:?}", msg);
             self.bot
-                .send_message(
-                    msg.chat_id().expect("message to have chat id"),
-                    "❌ Нужно быть резидентом",
-                )
+                .send_message(msg.chat.id, "❌ Нужно быть резидентом")
                 .reply_to(msg.id)
                 .disable_notification(true)
                 .await?;
@@ -467,9 +460,7 @@ impl TelegramBot {
     }
 
     async fn handle_status(&self, msg: &Message) -> Result<()> {
-        if msg
-            .chat_id()
-            .is_some_and(|c| c == self.config.public_chat_id)
+        if msg.chat.id == self.config.public_chat_id
             && let Some(msg_id) = self.get_status_message_id()
         {
             self.bot
@@ -661,13 +652,20 @@ impl TelegramBot {
         Ok(())
     }
 
-    async fn handle_plan_visit(&self, msg: &Message) -> Result<()> {
-        let msg_text = strip_command(msg.text().expect("message to have text"));
+    fn message_text(msg: &Message) -> &str {
+        strip_command(msg.text().expect("message to have text"))
+    }
 
-        let visit_update = parse_visit_text(
-            msg.from.as_ref().expect("message to have author").id,
-            msg_text,
-        );
+    fn message_author(msg: &Message) -> Uid {
+        Uid(msg.from.as_ref().expect("message to have author").id)
+    }
+
+    fn parse_visit_message(msg: &Message) -> VisitUpdate {
+        parse_visit_text(Self::message_author(msg), Self::message_text(msg))
+    }
+
+    async fn handle_plan_visit(&self, msg: &Message) -> Result<()> {
+        let visit_update = Self::parse_visit_message(msg);
 
         let new = self.visits.upsert_visit(visit_update.clone()).await?;
 
@@ -682,7 +680,7 @@ impl TelegramBot {
                         "Обновил"
                     },
                     format_date(visit_update.day),
-                    if let Some(p) = visit_update.purpose {
+                    if let Some(ref p) = visit_update.purpose {
                         format!(": \"{p}\"")
                     } else {
                         "".to_owned()
@@ -693,11 +691,11 @@ impl TelegramBot {
             .disable_notification(true)
             .await?;
 
-        if msg_text == "panic" {
+        if let Some("panic") = visit_update.purpose.as_deref() {
             panic!("ayaya");
         }
 
-        if msg_text == "error" {
+        if let Some("error") = visit_update.purpose.as_deref() {
             anyhow::bail!("ayayaya");
         }
 
@@ -715,12 +713,7 @@ impl TelegramBot {
     }
 
     async fn handle_unplan_visit(&self, msg: &Message) -> Result<()> {
-        let msg_text = strip_command(msg.text().expect("message to have text"));
-
-        let visit = parse_visit_text(
-            msg.from.as_ref().expect("message to have author").id,
-            msg_text,
-        );
+        let visit = Self::parse_visit_message(msg);
 
         self.visits.delete_visit(visit.person, visit.day).await?;
 
@@ -730,9 +723,9 @@ impl TelegramBot {
     }
 
     async fn handle_check_in(&self, msg: &Message) -> Result<()> {
-        let person = Uid(msg.from.as_ref().expect("message to have author").id);
+        let person = Self::message_author(msg);
         let day = today();
-        let purpose_raw = strip_command(msg.text().expect("message to have text"));
+        let purpose_raw = Self::message_text(msg);
         let purpose = if purpose_raw.is_empty() {
             None
         } else {
@@ -754,7 +747,7 @@ impl TelegramBot {
     }
 
     async fn handle_check_out(&self, msg: &Message) -> Result<()> {
-        let person = Uid(msg.from.as_ref().expect("message to have author").id);
+        let person = Self::message_author(msg);
         let day = today();
 
         let visit_update = VisitUpdate {
