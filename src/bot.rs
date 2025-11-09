@@ -417,12 +417,19 @@ impl TelegramBot {
             .map(|v| self.format_visit_without_status(v, &details[&v.person]))
             .join("\n");
 
-        let is_open = !checked_in.is_empty();
+        let any_resident_inside = visits
+            .iter()
+            .any(|v| v.status == VisitStatus::CheckedIn && details[&v.person].resident);
 
-        if is_open {
+        let anybody_inside = visits.iter().any(|v| v.status == VisitStatus::CheckedIn);
+
+        if any_resident_inside {
             status.push_str("🟢 Хакспейс сейчас открыт");
         } else {
             status.push_str("🔒 Хакспейс сейчас закрыт");
+            if anybody_inside {
+                status.push_str(", но кто-то из гостей внутри???");
+            }
             status.push_str(
                 "\n\n💡 Если хочешь зайти, можно спросить в чате, возможно кто-то из резидентов может прийти.",
             );
