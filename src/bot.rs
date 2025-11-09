@@ -254,39 +254,38 @@ impl TelegramBot {
             .is_present())
     }
 
+    async fn fetch_person_details(&self, user: Uid) -> Result<PersonDetails> {
+        let user_id = user.0;
+        let chat_member = self
+            .bot
+            .get_chat_member(self.config.public_chat_id, user_id)
+            .await?;
+        let resident = self.is_resident(user_id).await?;
+        let display_name = if let Some(ref username) = chat_member.user.username {
+            username.clone()
+        } else {
+            chat_member.user.full_name()
+        };
+        let link = chat_member.user.preferably_tme_url().to_string();
+        Ok(PersonDetails {
+            resident,
+            display_name,
+            link,
+        })
+    }
+
     async fn fetch_persons_details(
         &self,
         persons: impl IntoIterator<Item = Uid>,
     ) -> Result<HashMap<Uid, PersonDetails>> {
-        Ok(
-            futures::future::try_join_all(persons.into_iter().unique().map(
-                async |user| -> Result<_> {
-                    let user_id = user.0;
-                    let chat_member = self
-                        .bot
-                        .get_chat_member(self.config.public_chat_id, user_id)
-                        .await?;
-                    let resident = self.is_resident(user_id).await?;
-                    let display_name = if let Some(ref username) = chat_member.user.username {
-                        username.clone()
-                    } else {
-                        chat_member.user.full_name()
-                    };
-                    let link = chat_member.user.preferably_tme_url().to_string();
-                    Ok((
-                        user,
-                        PersonDetails {
-                            resident,
-                            display_name,
-                            link,
-                        },
-                    ))
-                },
-            ))
-            .await?
-            .into_iter()
-            .collect::<HashMap<_, _>>(),
+        Ok(futures::future::try_join_all(
+            persons.into_iter().unique().map(async |user| -> Result<_> {
+                Ok((user, self.fetch_person_details(user).await?))
+            }),
         )
+        .await?
+        .into_iter()
+        .collect::<HashMap<_, _>>())
     }
 
     async fn check_is_public_chat_msg(&self, msg: &Message) -> Result<Option<ChatId>> {
@@ -664,6 +663,14 @@ impl TelegramBot {
         parse_visit_text(Self::message_author(msg), Self::message_text(msg))
     }
 
+    fn maybe_panic(text: &str) -> Result<()> {
+        match text {
+            "panic" => panic!("ayaya"),
+            "error" => anyhow::bail!("ayayaya"),
+            _ => Ok(()),
+        }
+    }
+
     async fn handle_plan_visit(&self, msg: &Message) -> Result<()> {
         let visit_update = Self::parse_visit_message(msg);
 
@@ -680,24 +687,18 @@ impl TelegramBot {
                         "Обновил"
                     },
                     format_date(visit_update.day),
-                    if let Some(ref p) = visit_update.purpose {
-                        format!(": \"{p}\"")
-                    } else {
-                        "".to_owned()
-                    }
+                    visit_update
+                        .purpose
+                        .as_deref()
+                        .map(|p| { format!(": \"{p}\"") })
+                        .unwrap_or_default()
                 ),
             )
             .reply_to(msg.id)
             .disable_notification(true)
             .await?;
 
-        if let Some("panic") = visit_update.purpose.as_deref() {
-            panic!("ayaya");
-        }
-
-        if let Some("error") = visit_update.purpose.as_deref() {
-            anyhow::bail!("ayayaya");
-        }
+        Self::maybe_panic(visit_update.purpose.as_deref().unwrap_or_default())?;
 
         Ok(())
     }
