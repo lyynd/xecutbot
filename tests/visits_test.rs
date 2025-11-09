@@ -70,16 +70,24 @@ async fn test_upsert_update_visit() {
         purpose: Some("work".to_string()),
         status: VisitStatus::Planned,
     };
-    let inserted = visits.upsert_visit(update1).await.unwrap();
-    assert!(inserted);
+    let updated = visits.upsert_visit(update1).await.unwrap();
+    assert!(updated);
     let update2 = xecut_bot::visits::VisitUpdate {
         person,
         day,
         purpose: Some("meeting".to_string()),
         status: VisitStatus::CheckedIn,
     };
-    let inserted = visits.upsert_visit(update2).await.unwrap();
-    assert!(!inserted);
+    let updated = visits.upsert_visit(update2).await.unwrap();
+    assert!(updated);
+    let update3 = xecut_bot::visits::VisitUpdate {
+        person,
+        day,
+        purpose: Some("meeting".to_string()),
+        status: VisitStatus::CheckedIn,
+    };
+    let updated = visits.upsert_visit(update3).await.unwrap();
+    assert!(!updated);
     let visits_vec = visits.get_visits(day, day).await.unwrap();
     assert_eq!(
         visits_vec,

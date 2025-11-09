@@ -100,7 +100,7 @@ impl Visits {
         )
         .fetch_optional(&mut *tx)
         .await?;
-        let mut inserted = false;
+        let changed_status;
         if let Some(row) = existing {
             let should_update_purpose = visit_update.purpose.is_some();
             let should_update_status = visit_update.status != VisitStatus::from(row.status as i32);
@@ -117,6 +117,7 @@ impl Visits {
                 .execute(&mut *tx)
                 .await?;
             }
+            changed_status = should_update_status;
         } else {
             let purpose = visit_update.purpose.unwrap_or_default();
             let status_int: i32 = visit_update.status.into();
@@ -129,10 +130,10 @@ impl Visits {
             )
             .execute(&mut *tx)
             .await?;
-            inserted = true;
+            changed_status = true;
         }
         tx.commit().await?;
-        Ok(inserted)
+        Ok(changed_status)
     }
 
     pub async fn check_out_everybody(&self, day: NaiveDate) -> Result<()> {

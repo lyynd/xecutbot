@@ -14,7 +14,7 @@ use tokio_util::sync::CancellationToken;
 use teloxide::{
     prelude::*,
     sugar::request::{RequestLinkPreviewExt, RequestReplyExt as _},
-    types::{MessageId, ParseMode, ReactionType},
+    types::{InlineKeyboardButton, InlineKeyboardMarkup, MessageId, ParseMode, ReactionType},
     utils::command::BotCommands,
 };
 
@@ -105,24 +105,28 @@ fn parse_visit_text(author: Uid, msg: &str) -> VisitUpdate {
     }
 }
 
+fn format_close_date(date: NaiveDate) -> Option<&'static str> {
+    let today = today();
+    match (date - today).num_days() {
+        0 => Some("сегодня"),
+        1 => Some("завтра"),
+        2 => Some("послезавтра"),
+        _ => None,
+    }
+}
+
 fn format_date(date: NaiveDate) -> String {
     let format = if date - today() > TimeDelta::days(60) {
-        "%d %B %Y (%A)"
+        "%-d %B %Y (%A)"
     } else {
-        "%d %B (%A)"
+        "%-d %B (%A)"
     };
     let base_date = date
         .format_localized(format, Locale::ru_RU)
         .to_string()
         .to_lowercase();
-    if date - today() == TimeDelta::days(0) {
-        return "сегодня, ".to_owned() + &base_date;
-    }
-    if date - today() == TimeDelta::days(1) {
-        return "завтра, ".to_owned() + &base_date;
-    }
-    if date - today() == TimeDelta::days(2) {
-        return "послезавтра, ".to_owned() + &base_date;
+    if let Some(close_date) = format_close_date(date) {
+        return format!("{}, {}", close_date, base_date);
     }
     base_date
 }
@@ -198,10 +202,10 @@ impl TelegramBot {
             log::error!("Can't set commands: {e}");
         }
 
-        let self_clone = self.clone();
+        let self_clone_outer1 = self.clone();
 
-        let handler = move |msg: Message, cmd: Command| {
-            let self_clone = self_clone.clone();
+        let handle_message = move |msg: Message, cmd: Command| {
+            let self_clone = self_clone_outer1.clone();
             async move {
                 let res = AssertUnwindSafe(self_clone.clone().handle_message(&msg, cmd))
                     .catch_unwind()
@@ -220,16 +224,44 @@ impl TelegramBot {
             }
         };
 
-        Dispatcher::builder(
-            self.bot.clone(),
-            Update::filter_message()
-                .filter_command::<Command>()
-                .endpoint(handler),
-        )
-        .enable_ctrlc_handler()
-        .build()
-        .dispatch()
-        .await;
+        let self_clone_outer2 = self.clone();
+
+        let handle_callback = move |q: CallbackQuery| {
+            let self_clone = self_clone_outer2.clone();
+            async move {
+                let res = AssertUnwindSafe(self_clone.clone().handle_callback(&q))
+                    .catch_unwind()
+                    .await;
+                self_clone.bot.answer_callback_query(q.id.clone()).await?;
+                if matches!(res, Err(_) | Ok(Err(_))) {
+                    self_clone
+                        .bot
+                        .send_message(
+                            self_clone.config.public_chat_id,
+                            "💥 Что-то пошло не так, найдите админа",
+                        )
+                        .await?;
+                    if let Ok(e) = res {
+                        return e;
+                    }
+                }
+                Ok(())
+            }
+        };
+
+        let handler = dptree::entry()
+            .branch(
+                Update::filter_message()
+                    .filter_command::<Command>()
+                    .endpoint(handle_message),
+            )
+            .branch(Update::filter_callback_query().endpoint(handle_callback));
+
+        Dispatcher::builder(self.bot.clone(), handler)
+            .enable_ctrlc_handler()
+            .build()
+            .dispatch()
+            .await;
     }
 
     async fn handle_message(self: Arc<Self>, msg: &Message, cmd: Command) -> Result<()> {
@@ -368,7 +400,7 @@ impl TelegramBot {
         self.bot
             .send_message(
                 chat_id,
-                format!("✅ Запостил в <a href=\"{forwarded_message_url}\">{channel_name}</a>"),
+                format!("✔️ Запостил в <a href=\"{forwarded_message_url}\">{channel_name}</a>"),
             )
             .parse_mode(ParseMode::Html)
             .disable_link_preview(true)
@@ -678,16 +710,32 @@ impl TelegramBot {
         }
     }
 
+    fn plan_visit_markup(day: NaiveDate) -> InlineKeyboardMarkup {
+        InlineKeyboardMarkup {
+            inline_keyboard: vec![vec![
+                InlineKeyboardButton::callback(
+                    format!(
+                        "🚋 Я тоже зайду {}",
+                        format_close_date(day).unwrap_or("в этот день")
+                    ),
+                    format!("/planvisit {}", day),
+                ),
+                InlineKeyboardButton::callback("🏠 Или нет", format!("/unplanvisit {}", day)),
+            ]],
+        }
+    }
+
     async fn handle_plan_visit(&self, msg: &Message) -> Result<()> {
         let visit_update = Self::parse_visit_message(msg);
 
         let new = self.visits.upsert_visit(visit_update.clone()).await?;
 
-        self.bot
+        let mut message = self
+            .bot
             .send_message(
                 msg.chat.id,
                 format!(
-                    "✅🗓️ {} план зайти в хакспейс {}{}",
+                    "🗓️🚋 {} план зайти в хакспейс {}{} ✔️",
                     if new {
                         "Добавил"
                     } else {
@@ -702,8 +750,13 @@ impl TelegramBot {
                 ),
             )
             .reply_to(msg.id)
-            .disable_notification(true)
-            .await?;
+            .disable_notification(true);
+
+        if msg.chat.id == self.config.public_chat_id {
+            message = message.reply_markup(Self::plan_visit_markup(visit_update.day));
+        }
+
+        message.await?;
 
         Self::maybe_panic(visit_update.purpose.as_deref().unwrap_or_default())?;
 
@@ -720,12 +773,55 @@ impl TelegramBot {
         Ok(())
     }
 
+    fn unplan_visit_markup(day: NaiveDate) -> InlineKeyboardMarkup {
+        InlineKeyboardMarkup {
+            inline_keyboard: vec![vec![
+                InlineKeyboardButton::callback(
+                    format!(
+                        "🏠 Я тоже не приду {}",
+                        format_close_date(day).unwrap_or("в этот день")
+                    ),
+                    format!("/unplanvisit {}", day),
+                ),
+                InlineKeyboardButton::callback("🚋 Или приду", format!("/planvisit {}", day)),
+            ]],
+        }
+    }
+
     async fn handle_unplan_visit(&self, msg: &Message) -> Result<()> {
-        let visit = Self::parse_visit_message(msg);
+        let visit_update = Self::parse_visit_message(msg);
 
-        self.visits.delete_visit(visit.person, visit.day).await?;
+        let deleted = self
+            .visits
+            .delete_visit(visit_update.person, visit_update.day)
+            .await?;
 
-        self.acknowledge_message(msg).await?;
+        if deleted {
+            let mut message = self
+                .bot
+                .send_message(
+                    msg.chat.id,
+                    format!(
+                        "🗓️🏠 Убрал план зайти в хакспейс {}{} ✔️",
+                        format_date(visit_update.day),
+                        visit_update
+                            .purpose
+                            .as_deref()
+                            .map(|p| { format!(": \"{p}\"") })
+                            .unwrap_or_default()
+                    ),
+                )
+                .reply_to(msg.id)
+                .disable_notification(true);
+
+            if msg.chat.id == self.config.public_chat_id {
+                message = message.reply_markup(Self::unplan_visit_markup(visit_update.day));
+            }
+
+            message.await?;
+        } else {
+            self.acknowledge_message(msg).await?;
+        }
 
         Ok(())
     }
@@ -785,6 +881,74 @@ impl TelegramBot {
         self.visits.check_out_everybody(day).await?;
 
         self.acknowledge_message(msg).await?;
+
+        Ok(())
+    }
+
+    async fn handle_callback(&self, q: &CallbackQuery) -> Result<()> {
+        let Some(data) = q.data.as_deref() else {
+            return Ok(());
+        };
+
+        if data.starts_with("/planvisit ") {
+            let author = Uid(q.from.id);
+
+            let visit_update = parse_visit_text(author, strip_command(data));
+
+            let new = self.visits.upsert_visit(visit_update.clone()).await?;
+
+            if new {
+                self.bot
+                    .send_message(
+                        self.config.public_chat_id,
+                        format!(
+                            "🗓️🚋 {} хочет зайти в хакспейс {}{}",
+                            self.format_person_link(&self.fetch_person_details(author).await?),
+                            format_date(visit_update.day),
+                            visit_update
+                                .purpose
+                                .as_deref()
+                                .map(|p| { format!(": \"{p}\"") })
+                                .unwrap_or_default()
+                        ),
+                    )
+                    .parse_mode(ParseMode::Html)
+                    .disable_link_preview(true)
+                    .disable_notification(true)
+                    .reply_markup(Self::plan_visit_markup(visit_update.day))
+                    .await?;
+            }
+        } else if data.starts_with("/unplanvisit ") {
+            let author = Uid(q.from.id);
+            let visit_update = parse_visit_text(author, strip_command(data));
+            let deleted = self
+                .visits
+                .delete_visit(visit_update.person, visit_update.day)
+                .await?;
+            if deleted {
+                self.bot
+                    .send_message(
+                        self.config.public_chat_id,
+                        format!(
+                            "🗓️🏠 {} больше не хочет зайти в хакспейс {}{}",
+                            self.format_person_link(&self.fetch_person_details(author).await?),
+                            format_date(visit_update.day),
+                            visit_update
+                                .purpose
+                                .as_deref()
+                                .map(|p| { format!(": \"{p}\"") })
+                                .unwrap_or_default()
+                        ),
+                    )
+                    .parse_mode(ParseMode::Html)
+                    .disable_link_preview(true)
+                    .disable_notification(true)
+                    .reply_markup(Self::unplan_visit_markup(visit_update.day))
+                    .await?;
+            }
+        } else {
+            anyhow::bail!("unhandled callback query: {:?}", q);
+        }
 
         Ok(())
     }
