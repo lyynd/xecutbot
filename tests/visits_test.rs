@@ -1,5 +1,6 @@
 use chrono::NaiveDate;
 use sqlx::sqlite::SqlitePool;
+use xecut_bot::backend::connect_db;
 use xecut_bot::bot::Uid;
 use xecut_bot::{Visit, VisitStatus, Visits};
 
@@ -29,8 +30,9 @@ async fn setup_schema(pool: &SqlitePool) {
 // Helper to create Visits with in-memory DB and apply schema
 async fn make_visits() -> Visits {
     let cfg = in_memory_db_config();
-    let visits = Visits::new(&cfg).await.unwrap();
-    setup_schema(visits.pool()).await;
+    let pool = connect_db(&cfg).await.unwrap();
+    let visits = Visits::new(pool.clone()).unwrap();
+    setup_schema(&pool).await;
     visits
 }
 
@@ -158,9 +160,7 @@ async fn test_cleanup() {
     let offset = *chrono::Local::now().offset();
     let fixed_datetime =
         chrono::DateTime::<chrono::FixedOffset>::from_naive_utc_and_offset(cleanup_date, offset);
-    xecut_bot::Visits::cleanup(visits.pool(), fixed_datetime)
-        .await
-        .unwrap();
+    visits.cleanup(fixed_datetime).await.unwrap();
     let visits_vec = visits.get_visits(new_day, new_day).await.unwrap();
     assert_eq!(
         visits_vec,

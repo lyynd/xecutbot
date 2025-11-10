@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use crate::{bot::Uid, config::DbConfig};
+use crate::bot::Uid;
 use anyhow::Result;
 use chrono::{Datelike, NaiveDate};
 use sqlx::sqlite::SqlitePool;
@@ -38,34 +38,33 @@ const VISIT_HISTORY_DAYS: i32 = 30;
 const VISITS_CLEANUP_INTERVAL: Duration = Duration::from_secs(4 * 60 * 60); // 4 hours
 
 impl Visits {
-    pub async fn new(config: &DbConfig) -> Result<Visits, anyhow::Error> {
-        let pool = SqlitePool::connect(&config.sqlite_path).await?;
-
+    pub fn new(pool: SqlitePool) -> Result<Visits> {
         Ok(Visits { pool })
     }
 
-    pub async fn spawn_cleanup_task(&self) -> CancellationToken {
-        let pool_clone = self.pool.clone();
-
-        let cancellation_token = CancellationToken::new();
-        let result = cancellation_token.clone();
-
-        tokio::task::spawn(async move {
-            let mut interval = tokio::time::interval(VISITS_CLEANUP_INTERVAL);
-
-            loop {
-                tokio::select! {
-                    _ = interval.tick() => {}
-                    _ = cancellation_token.cancelled() => { break }
-                };
-                log::debug!("Visits cleanup task running");
-                Self::cleanup(&pool_clone, crate::utils::now())
-                    .await
-                    .expect("successful cleanup");
-            }
+    pub async fn run(self) {
+        let ct = CancellationToken::new();
+        let ct_wait = ct.clone();
+        tokio::spawn(async move {
+            tokio::signal::ctrl_c().await.unwrap();
+            ct_wait.cancel();
         });
+        self.cleanup_loop(ct).await;
+    }
 
-        result
+    async fn cleanup_loop(&self, ct: CancellationToken) {
+        let mut interval = tokio::time::interval(VISITS_CLEANUP_INTERVAL);
+
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {}
+                _ = ct.cancelled() => { break }
+            };
+            log::debug!("Visits cleanup task running");
+            self.cleanup(crate::utils::now())
+                .await
+                .expect("successful cleanup");
+        }
     }
 
     pub async fn get_visits(&self, from: NaiveDate, to: NaiveDate) -> Result<Vec<Visit>> {
@@ -163,19 +162,15 @@ impl Visits {
             > 0)
     }
 
-    pub async fn cleanup(pool: &SqlitePool, now: impl Datelike) -> Result<()> {
+    pub async fn cleanup(&self, now: impl Datelike) -> Result<()> {
         let current_day = now.num_days_from_ce();
         let cutoff = current_day - VISIT_HISTORY_DAYS;
 
         sqlx::query!("DELETE FROM visit WHERE day < ?1", cutoff)
-            .execute(pool)
+            .execute(&self.pool)
             .await?;
 
         Ok(())
-    }
-
-    pub fn pool(&self) -> &SqlitePool {
-        &self.pool
     }
 }
 

@@ -17,9 +17,24 @@ pub struct DbConfig {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+pub struct RestApiConfig {
+    pub bind_address: String,
+}
+
+impl Default for RestApiConfig {
+    fn default() -> Self {
+        Self {
+            bind_address: "127.0.0.1:3000".to_owned(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Clone)]
 pub struct Config {
     pub telegram_bot: TelegramBotConfig,
     pub db: DbConfig,
+    #[serde(default)]
+    pub rest_api: RestApiConfig,
 }
 
 impl Config {

@@ -6,7 +6,7 @@ use sqlx::SqlitePool;
 use std::{
     collections::HashMap,
     panic::AssertUnwindSafe,
-    sync::{Arc, RwLock},
+    sync::{Arc, RwLock, Weak},
     time::Duration,
 };
 use tokio_util::sync::CancellationToken;
@@ -18,14 +18,15 @@ use teloxide::{
     utils::command::BotCommands,
 };
 
+use crate::utils::today;
 use crate::{
+    backend::Backend,
     config::TelegramBotConfig,
     visits::{Visit, VisitStatus, VisitUpdate},
 };
-use crate::{utils::today, visits::Visits};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Uid(UserId);
+pub struct Uid(pub UserId);
 
 impl From<i64> for Uid {
     fn from(value: i64) -> Self {
@@ -139,68 +140,31 @@ struct PersonDetails {
 
 const LIVE_UPDATE_INTERVAL: Duration = Duration::from_secs(2);
 
-pub struct TelegramBot {
+pub struct TelegramBot<B: Backend> {
     config: TelegramBotConfig,
     bot: Bot,
-    visits: Visits,
     status_message_id: RwLock<Option<MessageId>>,
+    backend: Weak<B>,
 }
 
-impl TelegramBot {
-    pub async fn new(config: TelegramBotConfig, visits: Visits) -> Result<Arc<TelegramBot>> {
+impl<B: Backend + Send + Sync + 'static> TelegramBot<B> {
+    pub fn new(config: TelegramBotConfig, backend: Weak<B>) -> Result<Arc<Self>> {
         let bot = Bot::new(config.bot_token.clone());
-        let status_message_id = RwLock::new(Self::load_status_message_id(visits.pool()).await?);
         Ok(Arc::new(TelegramBot {
             config,
             bot,
-            visits,
-            status_message_id,
+            status_message_id: RwLock::new(None),
+            backend,
         }))
     }
 
-    pub async fn spawn_update_live_task(self: &Arc<Self>) -> CancellationToken {
-        let cancellation_token = CancellationToken::new();
-        let result = cancellation_token.clone();
-        let self_clone = self.clone();
-
-        tokio::task::spawn(async move {
-            let mut interval = tokio::time::interval(LIVE_UPDATE_INTERVAL);
-
-            let mut last_live_status = None;
-
-            loop {
-                tokio::select! {
-                    _ = interval.tick() => {}
-                    _ = cancellation_token.cancelled() => { break }
-                };
-                log::trace!("Updating status message");
-                let new_live_status = match self_clone.get_status().await {
-                    Ok(s) => s,
-                    Err(e) => {
-                        log::error!("Error getting live status: {}", e);
-                        continue;
-                    }
-                };
-                if last_live_status.is_none_or(|ref v| v != &new_live_status)
-                    && let Err(e) = self_clone
-                        .update_live_status_message(&new_live_status)
-                        .await
-                {
-                    log::info!("Error updating status message: {}", e);
-                }
-                last_live_status = Some(new_live_status);
-            }
-        });
-
-        result
-    }
-
-    pub async fn run(self: Arc<Self>) {
+    pub async fn run(self: Arc<Self>) -> Result<()> {
         log::info!("Starting Telegram bot");
 
-        if let Err(e) = self.bot.set_my_commands(Command::bot_commands()).await {
-            log::error!("Can't set commands: {e}");
-        }
+        self.bot.set_my_commands(Command::bot_commands()).await?;
+
+        *self.status_message_id.write().unwrap() =
+            Self::load_status_message_id(self.backend.upgrade().unwrap().pool()).await?;
 
         let self_clone_outer1 = self.clone();
 
@@ -257,11 +221,54 @@ impl TelegramBot {
             )
             .branch(Update::filter_callback_query().endpoint(handle_callback));
 
+        let live_update_ct = self.clone().spawn_update_live_task().await;
+
         Dispatcher::builder(self.bot.clone(), handler)
             .enable_ctrlc_handler()
             .build()
             .dispatch()
             .await;
+
+        live_update_ct.cancel();
+
+        Ok(())
+    }
+
+    async fn spawn_update_live_task(self: &Arc<Self>) -> CancellationToken {
+        let cancellation_token = CancellationToken::new();
+        let result = cancellation_token.clone();
+        let self_clone = self.clone();
+
+        tokio::task::spawn(async move {
+            let mut interval = tokio::time::interval(LIVE_UPDATE_INTERVAL);
+
+            let mut last_live_status = None;
+
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {}
+                    _ = cancellation_token.cancelled() => { break }
+                };
+                log::trace!("Updating status message");
+                let new_live_status = match self_clone.get_status().await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        log::error!("Error getting live status: {:?}", e);
+                        continue;
+                    }
+                };
+                if last_live_status.is_none_or(|ref v| v != &new_live_status)
+                    && let Err(e) = self_clone
+                        .update_live_status_message(&new_live_status)
+                        .await
+                {
+                    log::error!("Error updating status message: {:?}", e);
+                }
+                last_live_status = Some(new_live_status);
+            }
+        });
+
+        result
     }
 
     async fn handle_message(self: Arc<Self>, msg: &Message, cmd: Command) -> Result<()> {
@@ -433,7 +440,13 @@ impl TelegramBot {
 
     async fn get_status(&self) -> Result<String> {
         let today = today();
-        let mut visits = self.visits.get_visits(today, today).await?;
+        let mut visits = self
+            .backend
+            .upgrade()
+            .unwrap()
+            .visits()
+            .get_visits(today, today)
+            .await?;
 
         let details = self
             .fetch_persons_details(visits.iter().map(|v| v.person))
@@ -510,6 +523,7 @@ impl TelegramBot {
                             .expect("should be able to create url of live status message")
                     ),
                 )
+                .reply_to(msg.id)
                 .parse_mode(ParseMode::Html)
                 .disable_link_preview(true)
                 .disable_notification(true)
@@ -521,6 +535,7 @@ impl TelegramBot {
 
         self.bot
             .send_message(msg.chat.id, status)
+            .reply_to(msg.id)
             .parse_mode(ParseMode::Html)
             .disable_link_preview(true)
             .disable_notification(true)
@@ -574,7 +589,10 @@ impl TelegramBot {
 
     async fn handle_get_visits(&self, msg: &Message) -> Result<()> {
         let visits = self
-            .visits
+            .backend
+            .upgrade()
+            .unwrap()
+            .visits()
             .get_visits(today(), today() + TimeDelta::days(185)) // If you change this, also change text in `format_visits`
             .await?;
 
@@ -618,7 +636,7 @@ impl TelegramBot {
     }
 
     async fn set_status_message_id(&self, id: Option<MessageId>) -> Result<()> {
-        Self::save_status_message_id(self.visits.pool(), id).await?;
+        Self::save_status_message_id(self.backend.upgrade().unwrap().pool(), id).await?;
         *self.status_message_id.write().unwrap() = id;
         Ok(())
     }
@@ -728,7 +746,13 @@ impl TelegramBot {
     async fn handle_plan_visit(&self, msg: &Message) -> Result<()> {
         let visit_update = Self::parse_visit_message(msg);
 
-        let new = self.visits.upsert_visit(visit_update.clone()).await?;
+        let new = self
+            .backend
+            .upgrade()
+            .unwrap()
+            .visits()
+            .upsert_visit(visit_update.clone())
+            .await?;
 
         let mut message = self
             .bot
@@ -792,7 +816,10 @@ impl TelegramBot {
         let visit_update = Self::parse_visit_message(msg);
 
         let deleted = self
-            .visits
+            .backend
+            .upgrade()
+            .unwrap()
+            .visits()
             .delete_visit(visit_update.person, visit_update.day)
             .await?;
 
@@ -843,7 +870,12 @@ impl TelegramBot {
             status: VisitStatus::CheckedIn,
         };
 
-        self.visits.upsert_visit(visit_update).await?;
+        self.backend
+            .upgrade()
+            .unwrap()
+            .visits()
+            .upsert_visit(visit_update)
+            .await?;
 
         self.acknowledge_message(msg).await?;
 
@@ -861,7 +893,12 @@ impl TelegramBot {
             status: VisitStatus::CheckedOut,
         };
 
-        self.visits.upsert_visit(visit_update).await?;
+        self.backend
+            .upgrade()
+            .unwrap()
+            .visits()
+            .upsert_visit(visit_update)
+            .await?;
 
         self.acknowledge_message(msg).await?;
 
@@ -878,7 +915,12 @@ impl TelegramBot {
 
         let day = today();
 
-        self.visits.check_out_everybody(day).await?;
+        self.backend
+            .upgrade()
+            .unwrap()
+            .visits()
+            .check_out_everybody(day)
+            .await?;
 
         self.acknowledge_message(msg).await?;
 
@@ -895,7 +937,13 @@ impl TelegramBot {
 
             let visit_update = parse_visit_text(author, strip_command(data));
 
-            let new = self.visits.upsert_visit(visit_update.clone()).await?;
+            let new = self
+                .backend
+                .upgrade()
+                .unwrap()
+                .visits()
+                .upsert_visit(visit_update.clone())
+                .await?;
 
             if new {
                 self.bot
@@ -922,7 +970,10 @@ impl TelegramBot {
             let author = Uid(q.from.id);
             let visit_update = parse_visit_text(author, strip_command(data));
             let deleted = self
-                .visits
+                .backend
+                .upgrade()
+                .unwrap()
+                .visits()
                 .delete_visit(visit_update.person, visit_update.day)
                 .await?;
             if deleted {
