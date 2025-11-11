@@ -12,9 +12,10 @@ use std::{
 use tokio_util::sync::CancellationToken;
 
 use teloxide::{
-    payloads::SendMessageSetters,
+    payloads::{SendMessage, SendMessageSetters as _},
     prelude::*,
-    sugar::request::{RequestLinkPreviewExt, RequestReplyExt as _},
+    requests::{HasPayload as _, JsonRequest},
+    sugar::request::{RequestLinkPreviewExt as _, RequestReplyExt as _},
     types::{InlineKeyboardButton, InlineKeyboardMarkup, MessageId, ParseMode, ReactionType},
     utils::command::BotCommands,
 };
@@ -332,10 +333,7 @@ impl<B: Backend> TelegramBot<B> {
         let chat_id = msg.chat.id;
         if chat_id != self.config.public_chat_id {
             log::debug!("check_is_public_chat_msg failed: {:?}", msg);
-            self.bot
-                .send_message(msg.chat.id, "❌ Нужно написать в публичный чат спейса")
-                .reply_to(msg.id)
-                .disable_notification(true)
+            self.send_message_reply(msg, "❌ Нужно написать в публичный чат спейса")
                 .await?;
             return Ok(None);
         }
@@ -348,10 +346,7 @@ impl<B: Backend> TelegramBot<B> {
             .await?
         {
             log::debug!("check_author_is_resident failed: {:?}", msg);
-            self.bot
-                .send_message(msg.chat.id, "❌ Нужно быть резидентом")
-                .reply_to(msg.id)
-                .disable_notification(true)
+            self.send_message_reply(msg, "❌ Нужно быть резидентом")
                 .await?;
             return Ok(false);
         }
@@ -368,10 +363,7 @@ impl<B: Backend> TelegramBot<B> {
 
         let Some(original_message) = msg.reply_to_message() else {
             log::debug!("message is not a reply: {:?}", msg);
-            self.bot
-                .send_message(chat_id, "❌ Нужно ответить на сообщение")
-                .reply_to(msg.id)
-                .disable_notification(true)
+            self.send_message_reply(msg, "❌ Нужно ответить на сообщение")
                 .await?;
             return Ok(());
         };
@@ -405,15 +397,11 @@ impl<B: Backend> TelegramBot<B> {
             .unwrap_or("канал")
             .to_owned();
 
-        self.bot
-            .send_message(
-                chat_id,
-                format!("✔️ Запостил в <a href=\"{forwarded_message_url}\">{channel_name}</a>"),
-            )
-            .parse_mode(ParseMode::Html)
-            .disable_link_preview(true)
-            .disable_notification(true)
-            .await?;
+        self.send_message_reply(
+            msg,
+            format!("✔️ Запостил в <a href=\"{forwarded_message_url}\">{channel_name}</a>"),
+        )
+        .await?;
 
         Ok(())
     }
@@ -532,32 +520,21 @@ impl<B: Backend> TelegramBot<B> {
         if msg.chat.id == self.config.public_chat_id
             && let Some(msg_id) = self.get_status_message_id()
         {
-            self.bot
-                .send_message(
-                    msg.chat.id,
-                    format!(
-                        "Посмотри в <a href=\"{}\">закрепе</a>",
-                        Message::url_of(self.config.public_chat_id, None, msg_id)
-                            .expect("should be able to create url of live status message")
-                    ),
-                )
-                .reply_to(msg.id)
-                .parse_mode(ParseMode::Html)
-                .disable_link_preview(true)
-                .disable_notification(true)
-                .await?;
+            self.send_message_reply(
+                msg,
+                format!(
+                    "Посмотри в <a href=\"{}\">закрепе</a>",
+                    Message::url_of(self.config.public_chat_id, None, msg_id)
+                        .expect("should be able to create url of live status message")
+                ),
+            )
+            .await?;
             return Ok(());
         }
 
         let status = self.get_status().await?;
 
-        self.bot
-            .send_message(msg.chat.id, status)
-            .reply_to(msg.id)
-            .parse_mode(ParseMode::Html)
-            .disable_link_preview(true)
-            .disable_notification(true)
-            .await?;
+        self.send_message_reply(msg, status).await?;
 
         Ok(())
     }
@@ -618,12 +595,7 @@ impl<B: Backend> TelegramBot<B> {
             formatted_visits = "😔 Нет никаких планов".to_owned();
         }
 
-        self.bot
-            .send_message(msg.chat.id, formatted_visits)
-            .parse_mode(ParseMode::Html)
-            .disable_link_preview(true)
-            .disable_notification(true)
-            .await?;
+        self.send_message_reply(msg, formatted_visits).await?;
 
         Ok(())
     }
@@ -678,14 +650,7 @@ impl<B: Backend> TelegramBot<B> {
         }
 
         let msg_id = self
-            .bot
-            .send_message(
-                chat_id,
-                Self::get_full_live_status(&self.get_status().await?),
-            )
-            .parse_mode(ParseMode::Html)
-            .disable_link_preview(true)
-            .disable_notification(true)
+            .send_message_public_chat(Self::get_full_live_status(&self.get_status().await?))
             .reply_markup(Self::live_status_markup())
             .await?
             .id;
@@ -738,19 +703,28 @@ impl<B: Backend> TelegramBot<B> {
         parse_visit_text(Self::message_author(msg), Self::message_text(msg))
     }
 
-    fn plan_visit_markup(day: NaiveDate) -> InlineKeyboardMarkup {
-        InlineKeyboardMarkup {
-            inline_keyboard: vec![vec![
-                InlineKeyboardButton::callback(
-                    format!(
-                        "🚋 Я тоже зайду {}",
-                        format_close_date(day).unwrap_or("в этот день")
-                    ),
-                    format!("/planvisit {}", day),
-                ),
-                InlineKeyboardButton::callback("🏠 Или нет", format!("/unplanvisit {}", day)),
-            ]],
-        }
+    fn common_modifiers(send_message: JsonRequest<SendMessage>) -> JsonRequest<SendMessage> {
+        send_message
+            .disable_notification(true)
+            .parse_mode(ParseMode::Html)
+            .disable_link_preview(true)
+    }
+
+    fn send_message_public_chat(&self, text: impl Into<String>) -> JsonRequest<SendMessage> {
+        Self::common_modifiers(self.bot.send_message(self.config.public_chat_id, text))
+    }
+
+    fn send_message_reply(
+        &self,
+        msg: &Message,
+        text: impl Into<String>,
+    ) -> JsonRequest<SendMessage> {
+        Self::common_modifiers(
+            self.bot
+                .send_message(msg.chat.id, text)
+                .with_payload_mut(|p| p.message_thread_id = msg.thread_id)
+                .reply_to(msg.id),
+        )
     }
 
     async fn acknowledge_message(&self, msg: &Message) -> Result<()> {
@@ -775,21 +749,6 @@ impl<B: Backend> TelegramBot<B> {
         self.acknowledge_message(msg).await?;
 
         Ok(())
-    }
-
-    fn unplan_visit_markup(day: NaiveDate) -> InlineKeyboardMarkup {
-        InlineKeyboardMarkup {
-            inline_keyboard: vec![vec![
-                InlineKeyboardButton::callback(
-                    format!(
-                        "🏠 Я тоже не приду {}",
-                        format_close_date(day).unwrap_or("в этот день")
-                    ),
-                    format!("/unplanvisit {}", day),
-                ),
-                InlineKeyboardButton::callback("🚋 Или приду", format!("/planvisit {}", day)),
-            ]],
-        }
     }
 
     async fn handle_unplan_visit(&self, msg: &Message) -> Result<()> {
@@ -826,34 +785,23 @@ impl<B: Backend> TelegramBot<B> {
         Ok(())
     }
 
-    fn check_in_markup() -> InlineKeyboardMarkup {
-        InlineKeyboardMarkup {
+    pub async fn announce_check_in(&self, visit_update: &VisitUpdate) -> Result<()> {
+        self.send_message_public_chat(format!(
+            "👷 {} пришёл в хакспейс{}",
+            self.format_person_link(&self.fetch_person_details(visit_update.person).await?),
+            visit_update
+                .purpose
+                .as_deref()
+                .map(|p| { format!(": \"{p}\"") })
+                .unwrap_or_default()
+        ))
+        .reply_markup(InlineKeyboardMarkup {
             inline_keyboard: vec![vec![
                 InlineKeyboardButton::callback("👷 Я тоже в спейсе", "/checkin"),
                 InlineKeyboardButton::callback("🌆 А я уже ушёл", "/checkout"),
             ]],
-        }
-    }
-
-    pub async fn announce_check_in(&self, visit_update: &VisitUpdate) -> Result<()> {
-        self.bot
-            .send_message(
-                self.config.public_chat_id,
-                format!(
-                    "👷 {} пришёл в хакспейс{}",
-                    self.format_person_link(&self.fetch_person_details(visit_update.person).await?),
-                    visit_update
-                        .purpose
-                        .as_deref()
-                        .map(|p| { format!(": \"{p}\"") })
-                        .unwrap_or_default()
-                ),
-            )
-            .parse_mode(ParseMode::Html)
-            .disable_link_preview(true)
-            .disable_notification(true)
-            .reply_markup(Self::check_in_markup())
-            .await?;
+        })
+        .await?;
         Ok(())
     }
 
@@ -887,43 +835,52 @@ impl<B: Backend> TelegramBot<B> {
     }
 
     pub async fn announce_plan(&self, visit_update: &VisitUpdate) -> Result<()> {
-        self.bot
-            .send_message(
-                self.config.public_chat_id,
-                format!(
-                    "🗓️🚋 {} планирует зайти в хакспейс {}{}",
-                    self.format_person_link(&self.fetch_person_details(visit_update.person).await?),
-                    format_date(visit_update.day),
-                    visit_update
-                        .purpose
-                        .as_deref()
-                        .map(|p| { format!(": \"{p}\"") })
-                        .unwrap_or_default()
+        let day = visit_update.day;
+        self.send_message_public_chat(format!(
+            "🗓️🚋 {} планирует зайти в хакспейс {}{}",
+            self.format_person_link(&self.fetch_person_details(visit_update.person).await?),
+            format_date(day),
+            visit_update
+                .purpose
+                .as_deref()
+                .map(|p| { format!(": \"{p}\"") })
+                .unwrap_or_default()
+        ))
+        .reply_markup(InlineKeyboardMarkup {
+            inline_keyboard: vec![vec![
+                InlineKeyboardButton::callback(
+                    format!(
+                        "🚋 Я тоже зайду {}",
+                        format_close_date(day).unwrap_or("в этот день")
+                    ),
+                    format!("/planvisit {}", day),
                 ),
-            )
-            .parse_mode(ParseMode::Html)
-            .disable_link_preview(true)
-            .disable_notification(true)
-            .reply_markup(Self::plan_visit_markup(visit_update.day))
-            .await?;
+                InlineKeyboardButton::callback("🏠 Или нет", format!("/unplanvisit {}", day)),
+            ]],
+        })
+        .await?;
         Ok(())
     }
 
     pub async fn announce_unplan(&self, person: Uid, day: NaiveDate) -> Result<()> {
-        self.bot
-            .send_message(
-                self.config.public_chat_id,
-                format!(
-                    "🗓️🏠 {} больше не планирует зайти в хакспейс {}",
-                    self.format_person_link(&self.fetch_person_details(person).await?),
-                    format_date(day)
+        self.send_message_public_chat(format!(
+            "🗓️🏠 {} больше не планирует зайти в хакспейс {}",
+            self.format_person_link(&self.fetch_person_details(person).await?),
+            format_date(day)
+        ))
+        .reply_markup(InlineKeyboardMarkup {
+            inline_keyboard: vec![vec![
+                InlineKeyboardButton::callback(
+                    format!(
+                        "🏠 Я тоже не приду {}",
+                        format_close_date(day).unwrap_or("в этот день")
+                    ),
+                    format!("/unplanvisit {}", day),
                 ),
-            )
-            .parse_mode(ParseMode::Html)
-            .disable_link_preview(true)
-            .disable_notification(true)
-            .reply_markup(Self::unplan_visit_markup(day))
-            .await?;
+                InlineKeyboardButton::callback("🚋 Или приду", format!("/planvisit {}", day)),
+            ]],
+        })
+        .await?;
         Ok(())
     }
 
