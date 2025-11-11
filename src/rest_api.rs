@@ -53,7 +53,6 @@ impl<B: Backend> RestApi<B> {
             .backend
             .upgrade()
             .unwrap()
-            .visits()
             .get_visits(today, today)
             .await?
             .iter()

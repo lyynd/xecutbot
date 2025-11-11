@@ -9,7 +9,7 @@ use crate::config::DbConfig;
 use crate::rest_api::RestApi;
 use crate::utils::today;
 use crate::visits::VisitUpdate;
-use crate::{Config, TelegramBot, VisitStatus, Visits};
+use crate::{Config, TelegramBot, Visit, VisitStatus, Visits};
 
 #[derive(Clone)]
 pub struct BackendImpl {
@@ -36,84 +36,26 @@ impl From<Uid> for i64 {
 
 pub trait Backend: Sized + Send + Sync + 'static {
     fn pool(&self) -> &SqlitePool;
-    fn visits(&self) -> &Visits;
-    fn tg_bot(&self) -> &TelegramBot<Self>;
 
     fn check_in(
         &self,
         person: Uid,
         purpose: Option<String>,
-    ) -> impl Future<Output = Result<()>> + Send {
-        async move {
-            let visit_update = VisitUpdate {
-                person,
-                day: today(),
-                purpose,
-                status: VisitStatus::CheckedIn,
-            };
-
-            let updated = self.visits().upsert_visit(&visit_update).await?;
-
-            if updated {
-                self.tg_bot().announce_check_in(&visit_update).await?;
-            }
-
-            Ok(())
-        }
-    }
-
-    fn check_out(&self, person: Uid) -> impl Future<Output = Result<()>> + Send {
-        async move {
-            let visit_update = VisitUpdate {
-                person,
-                day: today(),
-                purpose: None,
-                status: VisitStatus::CheckedOut,
-            };
-
-            self.visits().upsert_visit(&visit_update).await?;
-
-            Ok(())
-        }
-    }
-
+    ) -> impl Future<Output = Result<()>> + Send;
+    fn check_out(&self, person: Uid) -> impl Future<Output = Result<()>> + Send;
     fn plan_visit(
         &self,
         person: Uid,
         day: NaiveDate,
         purpose: Option<String>,
-    ) -> impl Future<Output = Result<()>> + Send {
-        async move {
-            let visit_update = VisitUpdate {
-                person,
-                day,
-                purpose,
-                status: VisitStatus::Planned,
-            };
-
-            let updated = self.visits().upsert_visit(&visit_update).await?;
-
-            if updated {
-                self.tg_bot().announce_plan(&visit_update).await?;
-            }
-
-            maybe_panic(visit_update.purpose.as_deref().unwrap_or_default())?;
-
-            Ok(())
-        }
-    }
-
-    fn unplan_visit(&self, person: Uid, day: NaiveDate) -> impl Future<Output = Result<()>> + Send {
-        async move {
-            let deleted = self.visits().delete_visit(person, day).await?;
-
-            if deleted {
-                self.tg_bot().announce_unplan(person, day).await?;
-            }
-
-            Ok(())
-        }
-    }
+    ) -> impl Future<Output = Result<()>> + Send;
+    fn unplan_visit(&self, person: Uid, day: NaiveDate) -> impl Future<Output = Result<()>> + Send;
+    fn check_out_everybody(&self) -> impl Future<Output = Result<()>> + Send;
+    fn get_visits(
+        &self,
+        from: NaiveDate,
+        to: NaiveDate,
+    ) -> impl Future<Output = Result<Vec<Visit>>> + Send;
 }
 
 fn maybe_panic(text: &str) -> Result<()> {
@@ -129,12 +71,72 @@ impl Backend for BackendImpl {
         &self.pool
     }
 
-    fn visits(&self) -> &Visits {
-        &self.visits
+    async fn check_in(&self, person: Uid, purpose: Option<String>) -> Result<()> {
+        let visit_update = VisitUpdate {
+            person,
+            day: today(),
+            purpose,
+            status: VisitStatus::CheckedIn,
+        };
+
+        let updated = self.visits.upsert_visit(&visit_update).await?;
+
+        if updated {
+            self.tg_bot.announce_check_in(&visit_update).await?;
+        }
+
+        Ok(())
     }
 
-    fn tg_bot(&self) -> &TelegramBot<Self> {
-        &self.tg_bot
+    async fn check_out(&self, person: Uid) -> Result<()> {
+        let visit_update = VisitUpdate {
+            person,
+            day: today(),
+            purpose: None,
+            status: VisitStatus::CheckedOut,
+        };
+
+        self.visits.upsert_visit(&visit_update).await?;
+
+        Ok(())
+    }
+
+    async fn plan_visit(&self, person: Uid, day: NaiveDate, purpose: Option<String>) -> Result<()> {
+        let visit_update = VisitUpdate {
+            person,
+            day,
+            purpose,
+            status: VisitStatus::Planned,
+        };
+
+        let updated = self.visits.upsert_visit(&visit_update).await?;
+
+        if updated {
+            self.tg_bot.announce_plan(&visit_update).await?;
+        }
+
+        maybe_panic(visit_update.purpose.as_deref().unwrap_or_default())?;
+
+        Ok(())
+    }
+
+    async fn unplan_visit(&self, person: Uid, day: NaiveDate) -> Result<()> {
+        let deleted = self.visits.delete_visit(person, day).await?;
+
+        if deleted {
+            self.tg_bot.announce_unplan(person, day).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn check_out_everybody(&self) -> Result<()> {
+        self.visits.check_out_everybody(today()).await?;
+        Ok(())
+    }
+
+    async fn get_visits(&self, from: NaiveDate, to: NaiveDate) -> Result<Vec<Visit>> {
+        self.visits.get_visits(from, to).await
     }
 }
 

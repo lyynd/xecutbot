@@ -12,6 +12,7 @@ use std::{
 use tokio_util::sync::CancellationToken;
 
 use teloxide::{
+    payloads::SendMessageSetters,
     prelude::*,
     sugar::request::{RequestLinkPreviewExt, RequestReplyExt as _},
     types::{InlineKeyboardButton, InlineKeyboardMarkup, MessageId, ParseMode, ReactionType},
@@ -444,7 +445,6 @@ impl<B: Backend> TelegramBot<B> {
             .backend
             .upgrade()
             .unwrap()
-            .visits()
             .get_visits(today, today)
             .await?;
 
@@ -511,7 +511,6 @@ impl<B: Backend> TelegramBot<B> {
             .backend
             .upgrade()
             .unwrap()
-            .visits()
             .get_visits(today + TimeDelta::days(1), today + TimeDelta::days(7))
             .await?;
 
@@ -603,7 +602,6 @@ impl<B: Backend> TelegramBot<B> {
             .backend
             .upgrade()
             .unwrap()
-            .visits()
             .get_visits(today(), today() + TimeDelta::days(185))
             .await?;
 
@@ -877,13 +875,10 @@ impl<B: Backend> TelegramBot<B> {
             return Ok(());
         }
 
-        let day = today();
-
         self.backend
             .upgrade()
             .unwrap()
-            .visits()
-            .check_out_everybody(day)
+            .check_out_everybody()
             .await?;
 
         self.acknowledge_message(msg).await?;

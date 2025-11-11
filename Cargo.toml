@@ -4,7 +4,7 @@ description = "Xecut hackerspace bot"
 readme = "README.md"
 license = "MIT OR Apache-2.0"
 keywords = ["hackerspace", "tokio"]
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 
 [dependencies]
