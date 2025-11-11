@@ -54,6 +54,8 @@ enum Command {
     Close,
     #[command(description = "🔃 Сделать закреп с текущей информацией о спейсе")]
     LiveStatus,
+    #[command(description = "🧟 Убрать закреп с текущей информацией о спейсе")]
+    UnLiveStatus,
 }
 
 fn strip_command(text: &str) -> &str {
@@ -289,6 +291,7 @@ impl<B: Backend> TelegramBot<B> {
             Command::CheckOut => self.handle_check_out(msg).await,
             Command::Close => self.handle_close(msg).await,
             Command::LiveStatus => self.handle_live_status(msg).await,
+            Command::UnLiveStatus => self.handle_unlive_status(msg).await,
         }
     }
 
@@ -657,6 +660,24 @@ impl<B: Backend> TelegramBot<B> {
             .disable_notification(true)
             .await?;
 
+        Ok(())
+    }
+
+    async fn handle_unlive_status(&self, msg: &Message) -> Result<()> {
+        let Some(chat_id) = self.check_is_public_chat_msg(msg).await? else {
+            return Ok(());
+        };
+        if !self.check_author_is_resident(msg).await? {
+            return Ok(());
+        }
+
+        if let Some(msg_id) = self.get_status_message_id() {
+            self.bot
+                .unpin_chat_message(chat_id)
+                .message_id(msg_id)
+                .await?;
+            self.set_status_message_id(None).await?;
+        }
         Ok(())
     }
 
