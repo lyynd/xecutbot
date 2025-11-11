@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use crate::bot::Uid;
+use crate::backend::Uid;
 use anyhow::Result;
 use chrono::{Datelike, NaiveDate};
 use sqlx::sqlite::SqlitePool;

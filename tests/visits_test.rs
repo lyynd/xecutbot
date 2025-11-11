@@ -1,7 +1,7 @@
 use chrono::NaiveDate;
 use sqlx::sqlite::SqlitePool;
+use xecut_bot::backend::Uid;
 use xecut_bot::backend::connect_db;
-use xecut_bot::bot::Uid;
 use xecut_bot::{Visit, VisitStatus, Visits};
 
 fn in_memory_db_config() -> xecut_bot::config::DbConfig {

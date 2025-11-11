@@ -2,10 +2,13 @@ use std::{path::PathBuf, sync::Arc};
 
 use anyhow::Result;
 use sqlx::SqlitePool;
+use teloxide::types::UserId;
 
 use crate::config::DbConfig;
 use crate::rest_api::RestApi;
-use crate::{Config, TelegramBot, Visits};
+use crate::utils::today;
+use crate::visits::VisitUpdate;
+use crate::{Config, TelegramBot, VisitStatus, Visits};
 
 #[derive(Clone)]
 pub struct BackendImpl {
@@ -15,10 +18,59 @@ pub struct BackendImpl {
     pub rest_api: RestApi<Self>,
 }
 
-pub trait Backend: Sized {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Uid(pub UserId);
+
+impl From<i64> for Uid {
+    fn from(value: i64) -> Self {
+        Uid(UserId(value as u64))
+    }
+}
+
+impl From<Uid> for i64 {
+    fn from(val: Uid) -> Self {
+        val.0.0 as i64
+    }
+}
+
+pub trait Backend: Sized + Sync {
     fn pool(&self) -> &SqlitePool;
     fn visits(&self) -> &Visits;
     fn tg_bot(&self) -> &TelegramBot<Self>;
+
+    fn check_in(
+        &self,
+        person: Uid,
+        purpose: Option<String>,
+    ) -> impl Future<Output = Result<()>> + Send {
+        async move {
+            let visit_update = VisitUpdate {
+                person,
+                day: today(),
+                purpose,
+                status: VisitStatus::CheckedIn,
+            };
+
+            self.visits().upsert_visit(visit_update).await?;
+
+            Ok(())
+        }
+    }
+
+    fn check_out(&self, person: Uid) -> impl Future<Output = Result<()>> + Send {
+        async move {
+            let visit_update = VisitUpdate {
+                person,
+                day: today(),
+                purpose: None,
+                status: VisitStatus::CheckedOut,
+            };
+
+            self.visits().upsert_visit(visit_update).await?;
+
+            Ok(())
+        }
+    }
 }
 
 impl Backend for BackendImpl {

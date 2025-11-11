@@ -18,27 +18,12 @@ use teloxide::{
     utils::command::BotCommands,
 };
 
-use crate::utils::today;
 use crate::{
     backend::Backend,
     config::TelegramBotConfig,
     visits::{Visit, VisitStatus, VisitUpdate},
 };
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Uid(pub UserId);
-
-impl From<i64> for Uid {
-    fn from(value: i64) -> Self {
-        Uid(UserId(value as u64))
-    }
-}
-
-impl From<Uid> for i64 {
-    fn from(val: Uid) -> Self {
-        val.0.0 as i64
-    }
-}
+use crate::{backend::Uid, utils::today};
 
 #[derive(BotCommands, Clone, Copy)]
 #[command(rename_rule = "lowercase")]
@@ -232,6 +217,21 @@ impl<B: Backend + Send + Sync + 'static> TelegramBot<B> {
         live_update_ct.cancel();
 
         Ok(())
+    }
+
+    fn live_status_markup() -> InlineKeyboardMarkup {
+        InlineKeyboardMarkup {
+            inline_keyboard: vec![
+                vec![
+                    InlineKeyboardButton::callback("👷 Я зашёл", "/checkin"),
+                    InlineKeyboardButton::callback("🌆 Я ушёл", "/checkout"),
+                ],
+                vec![
+                    InlineKeyboardButton::callback("🚋 Зайду сегодня", "/planvisit"),
+                    InlineKeyboardButton::callback("🏠 Передумал", "/unplanvisit"),
+                ],
+            ],
+        }
     }
 
     async fn spawn_update_live_task(self: &Arc<Self>) -> CancellationToken {
@@ -492,7 +492,7 @@ impl<B: Backend + Send + Sync + 'static> TelegramBot<B> {
             .join("\n");
 
         if !planned.is_empty() {
-            status.push_str("\n\n🗓️ Планировали зайти:\n");
+            status.push_str("\n\n📅 Планировали зайти:\n");
             status.push_str(&planned);
         }
 
@@ -505,6 +505,25 @@ impl<B: Backend + Send + Sync + 'static> TelegramBot<B> {
         if !left.is_empty() {
             status.push_str("\n\n🌆 Уже ушли:\n");
             status.push_str(&left);
+        }
+
+        let week_visits = self
+            .backend
+            .upgrade()
+            .unwrap()
+            .visits()
+            .get_visits(today + TimeDelta::days(1), today + TimeDelta::days(7)) // If you change this, also change text in `format_visits`
+            .await?;
+
+        let details = self
+            .fetch_persons_details(week_visits.iter().map(|v| v.person))
+            .await?;
+
+        let formatted_week_visits = self.format_visits(week_visits, &details);
+
+        if !formatted_week_visits.is_empty() {
+            status.push_str("\n\n🗓️ Планы на неделю:\n\n");
+            status.push_str(&formatted_week_visits);
         }
 
         Ok(status)
@@ -570,21 +589,13 @@ impl<B: Backend + Send + Sync + 'static> TelegramBot<B> {
 
     fn format_visits(&self, mut vs: Vec<Visit>, details: &HashMap<Uid, PersonDetails>) -> String {
         vs.sort_by_key(|v| v.day);
-        let plans = vs
-            .chunk_by(|v1, v2| v1.day == v2.day)
+
+        vs.chunk_by(|v1, v2| v1.day == v2.day)
             .map(|vs| {
                 let day = vs[0].day;
                 format!("{}:\n{}", format_date(day), self.format_day(vs, details))
             })
-            .join("\n\n");
-        let mut result = String::new();
-        if !plans.is_empty() {
-            result.push_str("🗓️ Планы посещений на ближайшие полгода:\n\n");
-            result.push_str(&plans);
-        } else {
-            result.push_str("😔 Нет никаких планов");
-        }
-        result
+            .join("\n\n")
     }
 
     async fn handle_get_visits(&self, msg: &Message) -> Result<()> {
@@ -593,17 +604,24 @@ impl<B: Backend + Send + Sync + 'static> TelegramBot<B> {
             .upgrade()
             .unwrap()
             .visits()
-            .get_visits(today(), today() + TimeDelta::days(185)) // If you change this, also change text in `format_visits`
+            .get_visits(today(), today() + TimeDelta::days(185))
             .await?;
 
         let details = self
             .fetch_persons_details(visits.iter().map(|v| v.person))
             .await?;
 
-        let formated_visits = self.format_visits(visits, &details);
+        let mut formatted_visits = self.format_visits(visits, &details);
+
+        if !formatted_visits.is_empty() {
+            formatted_visits =
+                format!("🗓️ Планы посещений на ближайшие полгода:\n\n{formatted_visits}",);
+        } else {
+            formatted_visits = "😔 Нет никаких планов".to_owned();
+        }
 
         self.bot
-            .send_message(msg.chat.id, formated_visits)
+            .send_message(msg.chat.id, formatted_visits)
             .parse_mode(ParseMode::Html)
             .disable_link_preview(true)
             .disable_notification(true)
@@ -670,6 +688,7 @@ impl<B: Backend + Send + Sync + 'static> TelegramBot<B> {
             .parse_mode(ParseMode::Html)
             .disable_link_preview(true)
             .disable_notification(true)
+            .reply_markup(Self::live_status_markup())
             .await?
             .id;
         self.set_status_message_id(Some(msg_id)).await?;
@@ -703,6 +722,7 @@ impl<B: Backend + Send + Sync + 'static> TelegramBot<B> {
             )
             .parse_mode(ParseMode::Html)
             .disable_link_preview(true)
+            .reply_markup(Self::live_status_markup())
             .await?;
 
         Ok(())
@@ -855,7 +875,6 @@ impl<B: Backend + Send + Sync + 'static> TelegramBot<B> {
 
     async fn handle_check_in(&self, msg: &Message) -> Result<()> {
         let person = Self::message_author(msg);
-        let day = today();
         let purpose_raw = Self::message_text(msg);
         let purpose = if purpose_raw.is_empty() {
             None
@@ -863,18 +882,10 @@ impl<B: Backend + Send + Sync + 'static> TelegramBot<B> {
             Some(purpose_raw.to_owned())
         };
 
-        let visit_update = VisitUpdate {
-            person,
-            day,
-            purpose: purpose.clone(),
-            status: VisitStatus::CheckedIn,
-        };
-
         self.backend
             .upgrade()
             .unwrap()
-            .visits()
-            .upsert_visit(visit_update)
+            .check_in(person, purpose)
             .await?;
 
         self.acknowledge_message(msg).await?;
@@ -884,21 +895,8 @@ impl<B: Backend + Send + Sync + 'static> TelegramBot<B> {
 
     async fn handle_check_out(&self, msg: &Message) -> Result<()> {
         let person = Self::message_author(msg);
-        let day = today();
 
-        let visit_update = VisitUpdate {
-            person,
-            day,
-            purpose: None,
-            status: VisitStatus::CheckedOut,
-        };
-
-        self.backend
-            .upgrade()
-            .unwrap()
-            .visits()
-            .upsert_visit(visit_update)
-            .await?;
+        self.backend.upgrade().unwrap().check_out(person).await?;
 
         self.acknowledge_message(msg).await?;
 
@@ -932,9 +930,9 @@ impl<B: Backend + Send + Sync + 'static> TelegramBot<B> {
             return Ok(());
         };
 
-        if data.starts_with("/planvisit ") {
-            let author = Uid(q.from.id);
+        let author = Uid(q.from.id);
 
+        if data.starts_with("/planvisit") {
             let visit_update = parse_visit_text(author, strip_command(data));
 
             let new = self
@@ -966,8 +964,7 @@ impl<B: Backend + Send + Sync + 'static> TelegramBot<B> {
                     .reply_markup(Self::plan_visit_markup(visit_update.day))
                     .await?;
             }
-        } else if data.starts_with("/unplanvisit ") {
-            let author = Uid(q.from.id);
+        } else if data.starts_with("/unplanvisit") {
             let visit_update = parse_visit_text(author, strip_command(data));
             let deleted = self
                 .backend
@@ -997,6 +994,14 @@ impl<B: Backend + Send + Sync + 'static> TelegramBot<B> {
                     .reply_markup(Self::unplan_visit_markup(visit_update.day))
                     .await?;
             }
+        } else if data == "/checkin" {
+            self.backend
+                .upgrade()
+                .unwrap()
+                .check_in(author, None)
+                .await?;
+        } else if data == "/checkout" {
+            self.backend.upgrade().unwrap().check_out(author).await?;
         } else {
             anyhow::bail!("unhandled callback query: {:?}", q);
         }
