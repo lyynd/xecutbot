@@ -237,7 +237,7 @@ impl<B: Backend> TelegramBot<B> {
                 ],
                 vec![
                     InlineKeyboardButton::callback("🚋 Зайду сегодня", "/planvisit"),
-                    InlineKeyboardButton::callback("🏠 Передумал", "/unplanvisit"),
+                    InlineKeyboardButton::callback("🤔 Передумал", "/unplanvisit"),
                 ],
             ],
         }
@@ -860,7 +860,7 @@ impl<B: Backend> TelegramBot<B> {
                     ),
                     format!("/planvisit {}", day),
                 ),
-                InlineKeyboardButton::callback("🏠 Или нет", format!("/unplanvisit {}", day)),
+                InlineKeyboardButton::callback("🤔 Или нет", format!("/unplanvisit {}", day)),
             ]],
         })
         .await?;
@@ -869,7 +869,7 @@ impl<B: Backend> TelegramBot<B> {
 
     pub async fn announce_unplan(&self, person: Uid, day: NaiveDate) -> Result<()> {
         self.send_message_public_chat(format!(
-            "🗓️🏠 {} больше не планирует зайти в хакспейс {}",
+            "🗓️🤔 {} больше не планирует зайти в хакспейс {}",
             self.format_person_link(&self.fetch_person_details(person).await?),
             format_date(day)
         ))
@@ -877,7 +877,7 @@ impl<B: Backend> TelegramBot<B> {
             inline_keyboard: vec![vec![
                 InlineKeyboardButton::callback(
                     format!(
-                        "🏠 Я тоже не приду {}",
+                        "🤔 Я тоже не приду {}",
                         format_close_date(day).unwrap_or("в этот день")
                     ),
                     format!("/unplanvisit {}", day),
