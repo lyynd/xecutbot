@@ -1,6 +1,7 @@
 use std::{path::PathBuf, sync::Arc};
 
 use anyhow::Result;
+use chrono::NaiveDate;
 use sqlx::SqlitePool;
 use teloxide::types::UserId;
 
@@ -33,7 +34,7 @@ impl From<Uid> for i64 {
     }
 }
 
-pub trait Backend: Sized + Sync {
+pub trait Backend: Sized + Send + Sync + 'static {
     fn pool(&self) -> &SqlitePool;
     fn visits(&self) -> &Visits;
     fn tg_bot(&self) -> &TelegramBot<Self>;
@@ -51,7 +52,11 @@ pub trait Backend: Sized + Sync {
                 status: VisitStatus::CheckedIn,
             };
 
-            self.visits().upsert_visit(visit_update).await?;
+            let updated = self.visits().upsert_visit(&visit_update).await?;
+
+            if updated {
+                self.tg_bot().announce_check_in(&visit_update).await?;
+            }
 
             Ok(())
         }
@@ -66,10 +71,56 @@ pub trait Backend: Sized + Sync {
                 status: VisitStatus::CheckedOut,
             };
 
-            self.visits().upsert_visit(visit_update).await?;
+            self.visits().upsert_visit(&visit_update).await?;
 
             Ok(())
         }
+    }
+
+    fn plan_visit(
+        &self,
+        person: Uid,
+        day: NaiveDate,
+        purpose: Option<String>,
+    ) -> impl Future<Output = Result<()>> + Send {
+        async move {
+            let visit_update = VisitUpdate {
+                person,
+                day,
+                purpose,
+                status: VisitStatus::Planned,
+            };
+
+            let updated = self.visits().upsert_visit(&visit_update).await?;
+
+            if updated {
+                self.tg_bot().announce_plan(&visit_update).await?;
+            }
+
+            maybe_panic(visit_update.purpose.as_deref().unwrap_or_default())?;
+
+            Ok(())
+        }
+    }
+
+    fn unplan_visit(&self, person: Uid, day: NaiveDate) -> impl Future<Output = Result<()>> + Send {
+        async move {
+            let deleted = self.visits().delete_visit(person, day).await?;
+
+            if deleted {
+                self.tg_bot().announce_unplan(person, day).await?;
+            }
+
+            Ok(())
+        }
+    }
+}
+
+fn maybe_panic(text: &str) -> Result<()> {
+    match text {
+        "panic" => panic!("ayaya"),
+        "error" => anyhow::bail!("ayayaya"),
+        _ => Ok(()),
     }
 }
 

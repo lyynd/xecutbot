@@ -88,7 +88,7 @@ impl Visits {
         .await?)
     }
 
-    pub async fn upsert_visit(&self, visit_update: VisitUpdate) -> Result<bool> {
+    pub async fn upsert_visit(&self, visit_update: &VisitUpdate) -> Result<bool> {
         let person: i64 = visit_update.person.into();
         let day = visit_update.day.num_days_from_ce();
         let mut tx = self.pool.begin().await?;
@@ -104,7 +104,7 @@ impl Visits {
             let should_update_purpose = visit_update.purpose.is_some();
             let should_update_status = visit_update.status != VisitStatus::from(row.status as i32);
             if should_update_purpose || should_update_status {
-                let purpose = visit_update.purpose.unwrap_or(row.purpose);
+                let purpose = visit_update.purpose.clone().unwrap_or(row.purpose);
                 let status_int: i32 = visit_update.status.into();
                 sqlx::query!(
                     "UPDATE visit SET purpose = ?3, status = ?4 WHERE person = ?1 AND day = ?2",
@@ -118,7 +118,7 @@ impl Visits {
             }
             changed_status = should_update_status;
         } else {
-            let purpose = visit_update.purpose.unwrap_or_default();
+            let purpose = visit_update.purpose.clone().unwrap_or_default();
             let status_int: i32 = visit_update.status.into();
             sqlx::query!(
                 "INSERT INTO visit (person, day, purpose, status) VALUES (?1, ?2, ?3, ?4)",

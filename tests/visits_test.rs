@@ -47,7 +47,7 @@ async fn test_upsert_and_get_visits() {
         purpose: Some("work".to_string()),
         status: VisitStatus::Planned,
     };
-    let inserted = visits.upsert_visit(update).await.unwrap();
+    let inserted = visits.upsert_visit(&update).await.unwrap();
     assert!(inserted);
     let visits_vec = visits.get_visits(day, day).await.unwrap();
     assert_eq!(
@@ -72,7 +72,7 @@ async fn test_upsert_update_visit() {
         purpose: Some("work".to_string()),
         status: VisitStatus::Planned,
     };
-    let updated = visits.upsert_visit(update1).await.unwrap();
+    let updated = visits.upsert_visit(&update1).await.unwrap();
     assert!(updated);
     let update2 = xecut_bot::visits::VisitUpdate {
         person,
@@ -80,7 +80,7 @@ async fn test_upsert_update_visit() {
         purpose: Some("meeting".to_string()),
         status: VisitStatus::CheckedIn,
     };
-    let updated = visits.upsert_visit(update2).await.unwrap();
+    let updated = visits.upsert_visit(&update2).await.unwrap();
     assert!(updated);
     let update3 = xecut_bot::visits::VisitUpdate {
         person,
@@ -88,7 +88,7 @@ async fn test_upsert_update_visit() {
         purpose: Some("meeting".to_string()),
         status: VisitStatus::CheckedIn,
     };
-    let updated = visits.upsert_visit(update3).await.unwrap();
+    let updated = visits.upsert_visit(&update3).await.unwrap();
     assert!(!updated);
     let visits_vec = visits.get_visits(day, day).await.unwrap();
     assert_eq!(
@@ -113,7 +113,7 @@ async fn test_delete_visit() {
         purpose: Some("delete".to_string()),
         status: VisitStatus::Planned,
     };
-    let inserted = visits.upsert_visit(update).await.unwrap();
+    let inserted = visits.upsert_visit(&update).await.unwrap();
     assert!(inserted);
     let deleted = visits.delete_visit(person, day).await.unwrap();
     assert!(deleted);
@@ -148,9 +148,9 @@ async fn test_cleanup() {
         purpose: Some("new".to_string()),
         status: VisitStatus::Planned,
     };
-    let inserted = visits.upsert_visit(update_old).await.unwrap();
+    let inserted = visits.upsert_visit(&update_old).await.unwrap();
     assert!(inserted);
-    let inserted = visits.upsert_visit(update_new).await.unwrap();
+    let inserted = visits.upsert_visit(&update_new).await.unwrap();
     assert!(inserted);
     // Use a fixed date for cleanup instead of chrono::Local::now()
     let cleanup_date = NaiveDate::from_ymd_opt(2025, 8, 8)
@@ -193,9 +193,9 @@ async fn test_get_visits_range() {
         purpose: Some("bar".to_string()),
         status: VisitStatus::CheckedIn,
     };
-    let inserted = visits.upsert_visit(update1).await.unwrap();
+    let inserted = visits.upsert_visit(&update1).await.unwrap();
     assert!(inserted);
-    let inserted = visits.upsert_visit(update2).await.unwrap();
+    let inserted = visits.upsert_visit(&update2).await.unwrap();
     assert!(inserted);
     // Range covering both days
     let visits_vec = visits.get_visits(day1, day2).await.unwrap();

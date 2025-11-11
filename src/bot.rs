@@ -132,7 +132,7 @@ pub struct TelegramBot<B: Backend> {
     backend: Weak<B>,
 }
 
-impl<B: Backend + Send + Sync + 'static> TelegramBot<B> {
+impl<B: Backend> TelegramBot<B> {
     pub fn new(config: TelegramBotConfig, backend: Weak<B>) -> Result<Arc<Self>> {
         let bot = Bot::new(config.bot_token.clone());
         Ok(Arc::new(TelegramBot {
@@ -512,7 +512,7 @@ impl<B: Backend + Send + Sync + 'static> TelegramBot<B> {
             .upgrade()
             .unwrap()
             .visits()
-            .get_visits(today + TimeDelta::days(1), today + TimeDelta::days(7)) // If you change this, also change text in `format_visits`
+            .get_visits(today + TimeDelta::days(1), today + TimeDelta::days(7))
             .await?;
 
         let details = self
@@ -740,14 +740,6 @@ impl<B: Backend + Send + Sync + 'static> TelegramBot<B> {
         parse_visit_text(Self::message_author(msg), Self::message_text(msg))
     }
 
-    fn maybe_panic(text: &str) -> Result<()> {
-        match text {
-            "panic" => panic!("ayaya"),
-            "error" => anyhow::bail!("ayayaya"),
-            _ => Ok(()),
-        }
-    }
-
     fn plan_visit_markup(day: NaiveDate) -> InlineKeyboardMarkup {
         InlineKeyboardMarkup {
             inline_keyboard: vec![vec![
@@ -763,50 +755,6 @@ impl<B: Backend + Send + Sync + 'static> TelegramBot<B> {
         }
     }
 
-    async fn handle_plan_visit(&self, msg: &Message) -> Result<()> {
-        let visit_update = Self::parse_visit_message(msg);
-
-        let new = self
-            .backend
-            .upgrade()
-            .unwrap()
-            .visits()
-            .upsert_visit(visit_update.clone())
-            .await?;
-
-        let mut message = self
-            .bot
-            .send_message(
-                msg.chat.id,
-                format!(
-                    "🗓️🚋 {} план зайти в хакспейс {}{} ✔️",
-                    if new {
-                        "Добавил"
-                    } else {
-                        "Обновил"
-                    },
-                    format_date(visit_update.day),
-                    visit_update
-                        .purpose
-                        .as_deref()
-                        .map(|p| { format!(": \"{p}\"") })
-                        .unwrap_or_default()
-                ),
-            )
-            .reply_to(msg.id)
-            .disable_notification(true);
-
-        if msg.chat.id == self.config.public_chat_id {
-            message = message.reply_markup(Self::plan_visit_markup(visit_update.day));
-        }
-
-        message.await?;
-
-        Self::maybe_panic(visit_update.purpose.as_deref().unwrap_or_default())?;
-
-        Ok(())
-    }
-
     async fn acknowledge_message(&self, msg: &Message) -> Result<()> {
         self.bot
             .set_message_reaction(msg.chat.id, msg.id)
@@ -814,6 +762,20 @@ impl<B: Backend + Send + Sync + 'static> TelegramBot<B> {
                 emoji: "✍".to_owned(),
             }])
             .await?;
+        Ok(())
+    }
+
+    async fn handle_plan_visit(&self, msg: &Message) -> Result<()> {
+        let visit_update = Self::parse_visit_message(msg);
+
+        self.backend
+            .upgrade()
+            .unwrap()
+            .plan_visit(visit_update.person, visit_update.day, visit_update.purpose)
+            .await?;
+
+        self.acknowledge_message(msg).await?;
+
         Ok(())
     }
 
@@ -835,40 +797,13 @@ impl<B: Backend + Send + Sync + 'static> TelegramBot<B> {
     async fn handle_unplan_visit(&self, msg: &Message) -> Result<()> {
         let visit_update = Self::parse_visit_message(msg);
 
-        let deleted = self
-            .backend
+        self.backend
             .upgrade()
             .unwrap()
-            .visits()
-            .delete_visit(visit_update.person, visit_update.day)
+            .unplan_visit(visit_update.person, visit_update.day)
             .await?;
 
-        if deleted {
-            let mut message = self
-                .bot
-                .send_message(
-                    msg.chat.id,
-                    format!(
-                        "🗓️🏠 Убрал план зайти в хакспейс {}{} ✔️",
-                        format_date(visit_update.day),
-                        visit_update
-                            .purpose
-                            .as_deref()
-                            .map(|p| { format!(": \"{p}\"") })
-                            .unwrap_or_default()
-                    ),
-                )
-                .reply_to(msg.id)
-                .disable_notification(true);
-
-            if msg.chat.id == self.config.public_chat_id {
-                message = message.reply_markup(Self::unplan_visit_markup(visit_update.day));
-            }
-
-            message.await?;
-        } else {
-            self.acknowledge_message(msg).await?;
-        }
+        self.acknowledge_message(msg).await?;
 
         Ok(())
     }
@@ -890,6 +825,37 @@ impl<B: Backend + Send + Sync + 'static> TelegramBot<B> {
 
         self.acknowledge_message(msg).await?;
 
+        Ok(())
+    }
+
+    fn check_in_markup() -> InlineKeyboardMarkup {
+        InlineKeyboardMarkup {
+            inline_keyboard: vec![vec![
+                InlineKeyboardButton::callback("👷 Я тоже в спейсе", "/checkin"),
+                InlineKeyboardButton::callback("🌆 А я уже ушёл", "/checkout"),
+            ]],
+        }
+    }
+
+    pub async fn announce_check_in(&self, visit_update: &VisitUpdate) -> Result<()> {
+        self.bot
+            .send_message(
+                self.config.public_chat_id,
+                format!(
+                    "👷 {} пришёл в хакспейс{}",
+                    self.format_person_link(&self.fetch_person_details(visit_update.person).await?),
+                    visit_update
+                        .purpose
+                        .as_deref()
+                        .map(|p| { format!(": \"{p}\"") })
+                        .unwrap_or_default()
+                ),
+            )
+            .parse_mode(ParseMode::Html)
+            .disable_link_preview(true)
+            .disable_notification(true)
+            .reply_markup(Self::check_in_markup())
+            .await?;
         Ok(())
     }
 
@@ -925,6 +891,47 @@ impl<B: Backend + Send + Sync + 'static> TelegramBot<B> {
         Ok(())
     }
 
+    pub async fn announce_plan(&self, visit_update: &VisitUpdate) -> Result<()> {
+        self.bot
+            .send_message(
+                self.config.public_chat_id,
+                format!(
+                    "🗓️🚋 {} планирует зайти в хакспейс {}{}",
+                    self.format_person_link(&self.fetch_person_details(visit_update.person).await?),
+                    format_date(visit_update.day),
+                    visit_update
+                        .purpose
+                        .as_deref()
+                        .map(|p| { format!(": \"{p}\"") })
+                        .unwrap_or_default()
+                ),
+            )
+            .parse_mode(ParseMode::Html)
+            .disable_link_preview(true)
+            .disable_notification(true)
+            .reply_markup(Self::plan_visit_markup(visit_update.day))
+            .await?;
+        Ok(())
+    }
+
+    pub async fn announce_unplan(&self, person: Uid, day: NaiveDate) -> Result<()> {
+        self.bot
+            .send_message(
+                self.config.public_chat_id,
+                format!(
+                    "🗓️🏠 {} больше не планирует зайти в хакспейс {}",
+                    self.format_person_link(&self.fetch_person_details(person).await?),
+                    format_date(day)
+                ),
+            )
+            .parse_mode(ParseMode::Html)
+            .disable_link_preview(true)
+            .disable_notification(true)
+            .reply_markup(Self::unplan_visit_markup(day))
+            .await?;
+        Ok(())
+    }
+
     async fn handle_callback(&self, q: &CallbackQuery) -> Result<()> {
         let Some(data) = q.data.as_deref() else {
             return Ok(());
@@ -934,66 +941,18 @@ impl<B: Backend + Send + Sync + 'static> TelegramBot<B> {
 
         if data.starts_with("/planvisit") {
             let visit_update = parse_visit_text(author, strip_command(data));
-
-            let new = self
-                .backend
+            self.backend
                 .upgrade()
                 .unwrap()
-                .visits()
-                .upsert_visit(visit_update.clone())
+                .plan_visit(visit_update.person, visit_update.day, visit_update.purpose)
                 .await?;
-
-            if new {
-                self.bot
-                    .send_message(
-                        self.config.public_chat_id,
-                        format!(
-                            "🗓️🚋 {} хочет зайти в хакспейс {}{}",
-                            self.format_person_link(&self.fetch_person_details(author).await?),
-                            format_date(visit_update.day),
-                            visit_update
-                                .purpose
-                                .as_deref()
-                                .map(|p| { format!(": \"{p}\"") })
-                                .unwrap_or_default()
-                        ),
-                    )
-                    .parse_mode(ParseMode::Html)
-                    .disable_link_preview(true)
-                    .disable_notification(true)
-                    .reply_markup(Self::plan_visit_markup(visit_update.day))
-                    .await?;
-            }
         } else if data.starts_with("/unplanvisit") {
             let visit_update = parse_visit_text(author, strip_command(data));
-            let deleted = self
-                .backend
+            self.backend
                 .upgrade()
                 .unwrap()
-                .visits()
-                .delete_visit(visit_update.person, visit_update.day)
+                .unplan_visit(visit_update.person, visit_update.day)
                 .await?;
-            if deleted {
-                self.bot
-                    .send_message(
-                        self.config.public_chat_id,
-                        format!(
-                            "🗓️🏠 {} больше не хочет зайти в хакспейс {}{}",
-                            self.format_person_link(&self.fetch_person_details(author).await?),
-                            format_date(visit_update.day),
-                            visit_update
-                                .purpose
-                                .as_deref()
-                                .map(|p| { format!(": \"{p}\"") })
-                                .unwrap_or_default()
-                        ),
-                    )
-                    .parse_mode(ParseMode::Html)
-                    .disable_link_preview(true)
-                    .disable_notification(true)
-                    .reply_markup(Self::unplan_visit_markup(visit_update.day))
-                    .await?;
-            }
         } else if data == "/checkin" {
             self.backend
                 .upgrade()

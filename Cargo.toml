@@ -4,7 +4,7 @@ description = "Xecut hackerspace bot"
 readme = "README.md"
 license = "MIT OR Apache-2.0"
 keywords = ["hackerspace", "tokio"]
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 
 [dependencies]
@@ -25,3 +25,4 @@ itertools = "0.14"
 clap = { version = "4.5", features = ["derive"] }
 axum = "0.8"
 tower-http = { version = "0.6", features = ["catch-panic"] }
+derive-where = "1.6"

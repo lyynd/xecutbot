@@ -8,17 +8,18 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
+use derive_where::derive_where;
 use tower_http::catch_panic::CatchPanicLayer;
 
 use crate::{VisitStatus, backend::Backend, config::RestApiConfig, utils::today};
 
-#[derive(Clone)]
+#[derive_where(Clone)]
 pub struct RestApi<B: Backend> {
     config: RestApiConfig,
     backend: Weak<B>,
 }
 
-impl<B: Backend + Clone + Send + Sync + 'static> RestApi<B> {
+impl<B: Backend> RestApi<B> {
     pub fn new(config: RestApiConfig, backend: Weak<B>) -> Self {
         RestApi { config, backend }
     }
