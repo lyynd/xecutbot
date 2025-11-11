@@ -145,13 +145,18 @@ impl<B: Backend> TelegramBot<B> {
         }))
     }
 
+    // Can not panic during execution of run(), because Backend is already constructed and not destructed yet
+    fn backend(&self) -> Arc<B> {
+        self.backend.upgrade().expect("Backend to be available")
+    }
+
     pub async fn run(self: Arc<Self>) -> Result<()> {
         log::info!("Starting Telegram bot");
 
         self.bot.set_my_commands(Command::bot_commands()).await?;
 
         *self.status_message_id.write().unwrap() =
-            Self::load_status_message_id(self.backend.upgrade().unwrap().pool()).await?;
+            Self::load_status_message_id(self.backend().pool()).await?;
 
         let self_clone_outer1 = self.clone();
 
@@ -429,12 +434,7 @@ impl<B: Backend> TelegramBot<B> {
 
     async fn get_status(&self) -> Result<String> {
         let today = today();
-        let mut visits = self
-            .backend
-            .upgrade()
-            .unwrap()
-            .get_visits(today, today)
-            .await?;
+        let mut visits = self.backend().get_visits(today, today).await?;
 
         let details = self
             .fetch_persons_details(visits.iter().map(|v| v.person))
@@ -496,9 +496,7 @@ impl<B: Backend> TelegramBot<B> {
         }
 
         let week_visits = self
-            .backend
-            .upgrade()
-            .unwrap()
+            .backend()
             .get_visits(today + TimeDelta::days(1), today + TimeDelta::days(7))
             .await?;
 
@@ -576,9 +574,7 @@ impl<B: Backend> TelegramBot<B> {
 
     async fn handle_get_visits(&self, msg: &Message) -> Result<()> {
         let visits = self
-            .backend
-            .upgrade()
-            .unwrap()
+            .backend()
             .get_visits(today(), today() + TimeDelta::days(185))
             .await?;
 
@@ -624,7 +620,7 @@ impl<B: Backend> TelegramBot<B> {
     }
 
     async fn set_status_message_id(&self, id: Option<MessageId>) -> Result<()> {
-        Self::save_status_message_id(self.backend.upgrade().unwrap().pool(), id).await?;
+        Self::save_status_message_id(self.backend().pool(), id).await?;
         *self.status_message_id.write().unwrap() = id;
         Ok(())
     }
@@ -740,9 +736,7 @@ impl<B: Backend> TelegramBot<B> {
     async fn handle_plan_visit(&self, msg: &Message) -> Result<()> {
         let visit_update = Self::parse_visit_message(msg);
 
-        self.backend
-            .upgrade()
-            .unwrap()
+        self.backend()
             .plan_visit(visit_update.person, visit_update.day, visit_update.purpose)
             .await?;
 
@@ -754,9 +748,7 @@ impl<B: Backend> TelegramBot<B> {
     async fn handle_unplan_visit(&self, msg: &Message) -> Result<()> {
         let visit_update = Self::parse_visit_message(msg);
 
-        self.backend
-            .upgrade()
-            .unwrap()
+        self.backend()
             .unplan_visit(visit_update.person, visit_update.day)
             .await?;
 
@@ -774,11 +766,7 @@ impl<B: Backend> TelegramBot<B> {
             Some(purpose_raw.to_owned())
         };
 
-        self.backend
-            .upgrade()
-            .unwrap()
-            .check_in(person, purpose)
-            .await?;
+        self.backend().check_in(person, purpose).await?;
 
         self.acknowledge_message(msg).await?;
 
@@ -808,7 +796,7 @@ impl<B: Backend> TelegramBot<B> {
     async fn handle_check_out(&self, msg: &Message) -> Result<()> {
         let person = Self::message_author(msg);
 
-        self.backend.upgrade().unwrap().check_out(person).await?;
+        self.backend().check_out(person).await?;
 
         self.acknowledge_message(msg).await?;
 
@@ -823,11 +811,7 @@ impl<B: Backend> TelegramBot<B> {
             return Ok(());
         }
 
-        self.backend
-            .upgrade()
-            .unwrap()
-            .check_out_everybody()
-            .await?;
+        self.backend().check_out_everybody().await?;
 
         self.acknowledge_message(msg).await?;
 
@@ -893,26 +877,18 @@ impl<B: Backend> TelegramBot<B> {
 
         if data.starts_with("/planvisit") {
             let visit_update = parse_visit_text(author, strip_command(data));
-            self.backend
-                .upgrade()
-                .unwrap()
+            self.backend()
                 .plan_visit(visit_update.person, visit_update.day, visit_update.purpose)
                 .await?;
         } else if data.starts_with("/unplanvisit") {
             let visit_update = parse_visit_text(author, strip_command(data));
-            self.backend
-                .upgrade()
-                .unwrap()
+            self.backend()
                 .unplan_visit(visit_update.person, visit_update.day)
                 .await?;
         } else if data == "/checkin" {
-            self.backend
-                .upgrade()
-                .unwrap()
-                .check_in(author, None)
-                .await?;
+            self.backend().check_in(author, None).await?;
         } else if data == "/checkout" {
-            self.backend.upgrade().unwrap().check_out(author).await?;
+            self.backend().check_out(author).await?;
         } else {
             anyhow::bail!("unhandled callback query: {:?}", q);
         }
