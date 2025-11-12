@@ -9,6 +9,7 @@ pub struct TelegramBotConfig {
     pub public_chat_id: ChatId,
     pub private_chat_id: ChatId,
     pub public_channel_id: ChatId,
+    pub alert_chat_id: ChatId,
 }
 
 #[derive(Debug, Deserialize, Clone)]

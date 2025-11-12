@@ -152,6 +152,13 @@ impl<B: Backend> TelegramBot<B> {
         self.backend.upgrade().expect("Backend to be available")
     }
 
+    async fn send_alert(&self) -> Result<()> {
+        self.bot
+            .send_message(self.config.alert_chat_id, "💥 Что-то пошло не так")
+            .await?;
+        Ok(())
+    }
+
     pub async fn run(self: Arc<Self>) -> Result<()> {
         log::info!("Starting Telegram bot");
 
@@ -169,10 +176,12 @@ impl<B: Backend> TelegramBot<B> {
                     .catch_unwind()
                     .await;
                 if matches!(res, Err(_) | Ok(Err(_))) {
+                    self_clone.send_alert().await?;
                     self_clone
-                        .bot
-                        .send_message(msg.chat.id, "💥 Что-то пошло не так, найдите админа")
-                        .reply_to(msg.id)
+                        .send_message_reply(
+                            &msg,
+                            "😬 Что-то пошло не так, но админ уже об этом знает",
+                        )
                         .await?;
                     if let Ok(e) = res {
                         return e;
@@ -192,11 +201,10 @@ impl<B: Backend> TelegramBot<B> {
                     .await;
                 self_clone.bot.answer_callback_query(q.id.clone()).await?;
                 if matches!(res, Err(_) | Ok(Err(_))) {
+                    self_clone.send_alert().await?;
                     self_clone
-                        .bot
-                        .send_message(
-                            self_clone.config.public_chat_id,
-                            "💥 Что-то пошло не так, найдите админа",
+                        .send_message_public_chat(
+                            "😬 Что-то пошло не так, но админ уже об этом знает",
                         )
                         .await?;
                     if let Ok(e) = res {

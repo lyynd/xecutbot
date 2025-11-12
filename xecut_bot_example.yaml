@@ -4,5 +4,7 @@ telegram_bot:
   public_chat_id: 0
   private_chat_id: 0
   public_channel_id: 0
+  # this can be user id, just don't forget to start chat with the bot first
+  alert_chat_id: 0
 db:
   sqlite_path: "xecut_bot.sqlite?mode=rwc"
